@@ -15,8 +15,11 @@
 #include <unordered_set>
 
 #include "as_helpers.h"
+#include <std_string.h>
 
 void ASDebug_Log(const char* fmt, ...);
+void ASDebug_Notice(const char* fmt, ...);
+bool ASDebug_IsVerbose();
 
 struct asIDBTypeId
 {
@@ -232,11 +235,12 @@ private:
 
 struct asIDBCallStackEntry
 {
-    int64_t          id; // unique id during debugging
-    std::string      declaration;
-    std::string_view section;
-    int              row, column;
-    asIDBScope       scope;
+    int64_t            id; // unique id during debugging
+    std::string        declaration;
+    std::string_view   section;
+    int                row, column;
+    asIScriptFunction* func = nullptr;
+    asIDBScope         scope;
 };
 
 using asIDBCallStackVector = std::vector<asIDBCallStackEntry>;
@@ -323,7 +327,10 @@ public:
     asIDBCallStackVector call_stack;
 
     // cached globals
-    asIDBVariable::Ptr globals;
+    asIDBVariable::Ptr                                       globals;
+    std::unordered_map<asIScriptModule*, asIDBVariable::Ptr> module_globals;
+    asIDBVariable::Ptr                                       engine_globals;
+    asIDBVariable::Ptr                                       other_modules_container;
 
     // cached set of variables
     asIDBVariable::Set variables;
@@ -353,6 +360,13 @@ public:
 
     // caches all of the global properties in the context.
     virtual void CacheGlobals();
+
+    // cache module globals and engine properties separately
+    virtual void               CacheGlobalsForModule(asIScriptModule* module);
+    virtual void               CacheEngineGlobals();
+    virtual asIDBVariable::Ptr GetModuleGlobals(asIScriptModule* module);
+    virtual asIDBVariable::Ptr GetEngineGlobals();
+    virtual asIDBVariable::Ptr GetOtherModules(asIScriptModule* activeModule);
 
     // cache call stack entries
     virtual void CacheCallstack();
@@ -418,6 +432,10 @@ struct asIDBBreakpoint
 {
     int                line;
     std::optional<int> column;
+    std::string        condition;
+    std::string        hitCondition;
+    std::string        logMessage;
+    mutable int        hitCount = 0;
 };
 
 using asIDBSectionBreakpoints = std::vector<asIDBBreakpoint>;
@@ -624,6 +642,12 @@ public:
     virtual ~asIDBDebugger()
     {
     }
+
+    std::unordered_set<asIScriptContext*> hooked_contexts;
+    void                                  HookContextOnce(asIScriptContext* ctx);
+    void                                  ClearHookedContexts();
+
+    virtual void SendLogOutput(const std::string& msg) {}
 
     // hooks the context onto the debugger; this will
     // reset the cache, and unhook the previous context

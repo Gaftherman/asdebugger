@@ -167,7 +167,7 @@ void asIDBScope::CalcLocals(asIDBDebugger& dbg, asIScriptFunction* function, asI
         int              stackOffset;
         ctx->GetVar(n, offset, &name, &typeId, &modifiers, 0, &stackOffset);
 
-        bool isTemporary = (container != parameters) && (!name || !*name);
+        bool isTemporary = (container != parameters) && (!name || !*name || *name == '{' || *name == '}');
 
         if (!ctx->IsVarInScope(n, offset))
             continue;
@@ -178,7 +178,7 @@ void asIDBScope::CalcLocals(asIDBDebugger& dbg, asIScriptFunction* function, asI
 
         asIDBTypeId typeKey{typeId, modifiers};
 
-        std::string localName = (name && *name) ? fmt::format("{} (&{})", name, n) : fmt::format("&{}", n);
+        std::string localName = (name && *name && *name != '{' && *name != '}') ? fmt::format("{} (&{})", name, n) : fmt::format("&{}", n);
 
         const std::string_view viewType = cache.GetTypeNameFromType(typeKey);
 
@@ -243,9 +243,13 @@ void asIDBScope::CalcLocals(asIDBDebugger& dbg, asIScriptFunction* function, asI
 
 void* asIDBCache::ResolvePropertyAddress(const asIDBVarAddr& id, int propertyIndex, int offset, int compositeOffset, bool isCompositeIndirect)
 {
+    uint8_t* base = id.ResolveAs<uint8_t>();
+    if (!base)
+        return nullptr;
+
     if (id.typeId & asTYPEID_SCRIPTOBJECT)
     {
-        asIScriptObject* obj = id.ResolveAs<asIScriptObject>();
+        asIScriptObject* obj = reinterpret_cast<asIScriptObject*>(base);
         return obj->GetAddressOfProperty(propertyIndex);
     }
 
@@ -253,17 +257,14 @@ void* asIDBCache::ResolvePropertyAddress(const asIDBVarAddr& id, int propertyInd
     // *(object + compositeOffset) + offset
     if (isCompositeIndirect)
     {
-        void* propAddr = *reinterpret_cast<uint8_t**>(id.ResolveAs<uint8_t>() + compositeOffset);
+        uint8_t** indirectPtr = reinterpret_cast<uint8_t**>(base + compositeOffset);
+        if (!indirectPtr || !*indirectPtr)
+            return nullptr;
 
-        // if we're null, leave it alone, otherwise point to
-        // where we really need to be pointing
-        if (propAddr)
-            propAddr = reinterpret_cast<uint8_t*>(propAddr) + offset;
-
-        return propAddr;
+        return *indirectPtr + offset;
     }
 
-    return id.ResolveAs<uint8_t>() + offset + compositeOffset;
+    return base + offset + compositeOffset;
 }
 
 /*virtual*/ asIDBExpected<asIDBVariable::WeakPtr> asIDBCache::ResolveExpression(std::string_view   expr,
@@ -470,7 +471,7 @@ void* asIDBCache::ResolvePropertyAddress(const asIDBVarAddr& id, int propertyInd
 
     if (auto sysfunc = ctx->GetSystemFunction())
         call_stack.emplace_back(asIDBCallStackEntry{dbg.frame_offset++, sysfunc->GetDeclaration(true, false, true),
-                                                    "", 0, 0,
+                                                    "", 0, 0, sysfunc,
                                                     asIDBScope(SCOPE_SYSTEM, dbg, sysfunc)});
 
     for (asUINT n = 0; n < ctx->GetCallstackSize(); n++)
@@ -503,8 +504,8 @@ void* asIDBCache::ResolvePropertyAddress(const asIDBVarAddr& id, int propertyInd
             decl = "???"; // FIXME: why does this happen?
 
         call_stack.push_back(
-            asIDBCallStackEntry{dbg.frame_offset++, std::move(decl), section, row, column,
-                                asIDBScope(func->GetFuncType() == asFUNC_SYSTEM ? SCOPE_SYSTEM : n, dbg, func)});
+            asIDBCallStackEntry{dbg.frame_offset++, std::move(decl), section, row, column, func,
+                                asIDBScope(func && func->GetFuncType() == asFUNC_SYSTEM ? SCOPE_SYSTEM : n, dbg, func)});
     }
 }
 
@@ -512,6 +513,129 @@ void* asIDBCache::ResolvePropertyAddress(const asIDBVarAddr& id, int propertyInd
 // being replaced by this one.
 /*virtual*/ void asIDBCache::Restore(asIDBCache& cache)
 {
+}
+
+/*virtual*/ void asIDBCache::CacheGlobalsForModule(asIScriptModule* module)
+{
+    if (!module)
+        return;
+
+    auto it = module_globals.find(module);
+    if (it != module_globals.end() && it->second && it->second->expanded)
+        return;
+
+    asIDBVariable::Ptr modVar = CreateVariable();
+    for (asUINT n = 0; n < module->GetGlobalVarCount(); n++)
+    {
+        const char* name      = nullptr;
+        const char* nameSpace = nullptr;
+        int         typeId    = 0;
+        bool        isConst   = false;
+
+        module->GetGlobalVar(n, &name, &nameSpace, &typeId, &isConst);
+        void* ptr = module->GetAddressOfGlobalVar(n);
+
+        asIDBTypeId            typeKey{typeId, isConst ? asTM_CONST : asTM_NONE};
+        const std::string_view viewType = GetTypeNameFromType(typeKey);
+
+        asIDBVarAddr idKey{typeId, isConst, ptr};
+
+        modVar->CreateChildVariable(asIDBVarName((nameSpace && nameSpace[0]) ? nameSpace : "", name ? name : ""), idKey, viewType);
+    }
+    modVar->evaluated = modVar->expanded = true;
+    if (!modVar->namedProps.empty() || !modVar->indexedProps.empty())
+        modVar->SetRefId();
+
+    module_globals[module] = modVar;
+}
+
+/*virtual*/ void asIDBCache::CacheEngineGlobals()
+{
+    if (!ctx || (engine_globals && engine_globals->expanded))
+        return;
+
+    engine_globals          = CreateVariable();
+    asIScriptEngine* engine = ctx->GetEngine();
+    if (engine)
+    {
+        for (asUINT n = 0; n < engine->GetGlobalPropertyCount(); n++)
+        {
+            const char* name      = nullptr;
+            const char* nameSpace = nullptr;
+            int         typeId    = 0;
+            void*       ptr       = nullptr;
+            bool        isConst   = false;
+
+            engine->GetGlobalPropertyByIndex(n, &name, &nameSpace, &typeId, &isConst, nullptr, &ptr);
+
+            asIDBTypeId            typeKey{typeId, isConst ? asTM_CONST : asTM_NONE};
+            const std::string_view viewType = GetTypeNameFromType(typeKey);
+
+            asIDBVarAddr idKey{typeId, isConst, ptr};
+
+            std::string localName = (nameSpace && nameSpace[0]) ? fmt::format("{}::{}", nameSpace, name ? name : "") : (name ? name : "");
+
+            engine_globals->CreateChildVariable(std::move(localName), idKey, viewType);
+        }
+    }
+    engine_globals->evaluated = engine_globals->expanded = true;
+    if (!engine_globals->namedProps.empty() || !engine_globals->indexedProps.empty())
+        engine_globals->SetRefId();
+}
+
+/*virtual*/ asIDBVariable::Ptr asIDBCache::GetModuleGlobals(asIScriptModule* module)
+{
+    if (!module)
+        return nullptr;
+    auto it = module_globals.find(module);
+    if (it != module_globals.end())
+        return it->second;
+    return nullptr;
+}
+
+/*virtual*/ asIDBVariable::Ptr asIDBCache::GetEngineGlobals()
+{
+    return engine_globals;
+}
+
+/*virtual*/ asIDBVariable::Ptr asIDBCache::GetOtherModules(asIScriptModule* activeModule)
+{
+    if (!ctx)
+        return nullptr;
+
+    asIScriptEngine* engine = ctx->GetEngine();
+    if (!engine)
+        return nullptr;
+
+    asUINT modCount = engine->GetModuleCount();
+    if (modCount <= 1)
+        return nullptr;
+
+    asIDBVariable::Ptr others = CreateVariable();
+    for (asUINT m = 0; m < modCount; m++)
+    {
+        asIScriptModule* mod = engine->GetModuleByIndex(m);
+        if (!mod || mod == activeModule)
+            continue;
+
+        CacheGlobalsForModule(mod);
+        auto modVars = module_globals[mod];
+        if (modVars && (!modVars->namedProps.empty() || !modVars->indexedProps.empty()))
+        {
+            const char* modName     = mod->GetName();
+            std::string displayName = (modName && *modName) ? modName : fmt::format("Module_{}", m);
+            auto        child       = others->CreateChildVariable(displayName, {}, "module");
+            child->expandRefId      = modVars->expandRefId;
+            child->namedProps       = modVars->namedProps;
+            child->indexedProps     = modVars->indexedProps;
+            child->evaluated = child->expanded = true;
+        }
+    }
+    others->evaluated = others->expanded = true;
+    if (!others->namedProps.empty())
+        others->SetRefId();
+
+    return others;
 }
 
 /*virtual*/ void asIDBCache::CacheGlobals()
@@ -525,45 +649,54 @@ void* asIDBCache::ResolvePropertyAddress(const asIDBVarAddr& id, int propertyInd
     if (globals->expanded)
         return;
 
-    auto main = ctx->GetFunction(0)->GetModule();
+    auto func = ctx->GetFunction(0);
+    auto main = func ? func->GetModule() : nullptr;
 
-    for (asUINT n = 0; n < main->GetGlobalVarCount(); n++)
+    if (main)
     {
-        const char* name;
-        const char* nameSpace;
-        int         typeId;
-        void*       ptr;
-        bool        isConst;
+        CacheGlobalsForModule(main);
+        for (asUINT n = 0; n < main->GetGlobalVarCount(); n++)
+        {
+            const char* name;
+            const char* nameSpace;
+            int         typeId;
+            void*       ptr;
+            bool        isConst;
 
-        main->GetGlobalVar(n, &name, &nameSpace, &typeId, &isConst);
-        ptr = main->GetAddressOfGlobalVar(n);
+            main->GetGlobalVar(n, &name, &nameSpace, &typeId, &isConst);
+            ptr = main->GetAddressOfGlobalVar(n);
 
-        asIDBTypeId            typeKey{typeId, isConst ? asTM_CONST : asTM_NONE};
-        const std::string_view viewType = GetTypeNameFromType(typeKey);
+            asIDBTypeId            typeKey{typeId, isConst ? asTM_CONST : asTM_NONE};
+            const std::string_view viewType = GetTypeNameFromType(typeKey);
 
-        asIDBVarAddr idKey{typeId, isConst, ptr};
+            asIDBVarAddr idKey{typeId, isConst, ptr};
 
-        globals->CreateChildVariable(asIDBVarName((nameSpace && nameSpace[0]) ? nameSpace : "", name), idKey, viewType);
+            globals->CreateChildVariable(asIDBVarName((nameSpace && nameSpace[0]) ? nameSpace : "", name), idKey, viewType);
+        }
     }
 
-    for (asUINT n = 0; n < main->GetEngine()->GetGlobalPropertyCount(); n++)
+    CacheEngineGlobals();
+    if (auto engine = ctx->GetEngine())
     {
-        const char* name;
-        const char* nameSpace;
-        int         typeId;
-        void*       ptr;
-        bool        isConst;
+        for (asUINT n = 0; n < engine->GetGlobalPropertyCount(); n++)
+        {
+            const char* name;
+            const char* nameSpace;
+            int         typeId;
+            void*       ptr;
+            bool        isConst;
 
-        main->GetEngine()->GetGlobalPropertyByIndex(n, &name, &nameSpace, &typeId, &isConst, nullptr, &ptr);
+            engine->GetGlobalPropertyByIndex(n, &name, &nameSpace, &typeId, &isConst, nullptr, &ptr);
 
-        asIDBTypeId            typeKey{typeId, isConst ? asTM_CONST : asTM_NONE};
-        const std::string_view viewType = GetTypeNameFromType(typeKey);
+            asIDBTypeId            typeKey{typeId, isConst ? asTM_CONST : asTM_NONE};
+            const std::string_view viewType = GetTypeNameFromType(typeKey);
 
-        asIDBVarAddr idKey{typeId, isConst, ptr};
+            asIDBVarAddr idKey{typeId, isConst, ptr};
 
-        std::string localName = (nameSpace && nameSpace[0]) ? fmt::format("{}::{}", nameSpace, name) : name;
+            std::string localName = (nameSpace && nameSpace[0]) ? fmt::format("{}::{}", nameSpace, name) : name;
 
-        globals->CreateChildVariable(std::move(localName), idKey, viewType);
+            globals->CreateChildVariable(std::move(localName), idKey, viewType);
+        }
     }
 
     globals->evaluated = globals->expanded = true;
@@ -572,6 +705,81 @@ void* asIDBCache::ResolvePropertyAddress(const asIDBVarAddr& id, int propertyInd
         !globals->indexedProps.empty())
         globals->SetRefId();
 }
+
+#ifdef _WIN32
+#    include <windows.h>
+static bool SafeReadStdString(std_string* strPtr, const char*& out_cstr, size_t& out_len)
+{
+    __try
+    {
+        size_t cap = strPtr->capacity();
+        size_t len = strPtr->len();
+        if (len > 1000000 || cap < len)
+            return false;
+        out_len  = len;
+        out_cstr = strPtr->c_str();
+        return (out_cstr != nullptr);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+#endif
+
+class asIDBStringTypeEvaluator : public asIDBTypeEvaluator
+{
+public:
+    virtual void Evaluate(asIDBVariable::Ptr var) const override
+    {
+        if (!var || !var->address.address)
+        {
+            var->value = "(null)";
+            return;
+        }
+
+        auto strPtr = var->address.ResolveAs<std_string>();
+        if (!strPtr)
+        {
+            var->value = "(null)";
+            return;
+        }
+
+        const char* c_str = nullptr;
+        size_t      len   = 0;
+
+#ifdef _WIN32
+        if (!SafeReadStdString(strPtr, c_str, len))
+        {
+            var->value = "\"(invalid string)\"";
+            return;
+        }
+#else
+        len = strPtr->len();
+        if (len > 1000000)
+        {
+            var->value = "\"(invalid string)\"";
+            return;
+        }
+        c_str = strPtr->c_str();
+#endif
+
+        if (!c_str)
+        {
+            var->value = "\"\"";
+            return;
+        }
+
+        if (len > 256)
+        {
+            var->value = fmt::format("\"{}...\" (len={})", std::string_view(c_str, 256), len);
+        }
+        else
+        {
+            var->value = fmt::format("\"{}\"", std::string_view(c_str, len));
+        }
+    }
+};
 
 class asIDBNullTypeEvaluator : public asIDBTypeEvaluator
 {
@@ -1097,6 +1305,13 @@ const asIDBTypeEvaluator& asIDBCache::GetEvaluator(const asIDBVarAddr& id) const
         return funcdefType;
     }
 
+    const char* typeName = type->GetName();
+    if (typeName && strcmp(typeName, "string") == 0)
+    {
+        static const asIDBStringTypeEvaluator stringType;
+        return stringType;
+    }
+
     // finally, just return the base one.
     static constexpr const asIDBObjectTypeEvaluator objectType;
     return objectType;
@@ -1330,6 +1545,40 @@ void asIDBFileWorkspace::CompileBreakpointPositions()
                     {
                         if (!lines.column.has_value() || lines.column.value() <= 0 || lines.column.value() == col)
                         {
+                            lines.hitCount++;
+
+                            // Logpoint: send message to DAP console and do not pause game!
+                            if (!lines.logMessage.empty())
+                            {
+                                debugger->SendLogOutput(fmt::format("[Logpoint] {}\n", lines.logMessage));
+                                continue;
+                            }
+
+                            // Hit count condition: if numeric, break only when hit count >= target
+                            if (!lines.hitCondition.empty())
+                            {
+                                int target = atoi(lines.hitCondition.c_str());
+                                if (target > 0 && lines.hitCount < target)
+                                    continue;
+                            }
+
+                            // Conditional expression: evaluate condition in frame 0
+                            if (!lines.condition.empty())
+                            {
+                                asIDBCache evalCache(*debugger, ctx);
+                                auto       exprRes = evalCache.ResolveExpression(lines.condition, 0);
+                                if (exprRes.has_value())
+                                {
+                                    auto var = exprRes.value().lock();
+                                    if (var)
+                                    {
+                                        var->Evaluate();
+                                        if (var->value == "false" || var->value == "0" || var->value == "(null)")
+                                            continue;
+                                    }
+                                }
+                            }
+
                             break_from_bp = true;
                             break;
                         }
@@ -1379,6 +1628,30 @@ void asIDBFileWorkspace::CompileBreakpointPositions()
     debugger->DebugBreak(ctx);
 }
 
+void asIDBDebugger::HookContextOnce(asIScriptContext* ctx)
+{
+    if (!ctx || ctx->GetState() == asEXECUTION_EXCEPTION)
+        return;
+
+    {
+        std::scoped_lock lock(mutex);
+        if (hooked_contexts.find(ctx) != hooked_contexts.end())
+            return;
+        hooked_contexts.insert(ctx);
+        if (workspace && ctx->GetEngine())
+            workspace->engines.insert(ctx->GetEngine());
+    }
+
+    ctx->SetLineCallback(asFUNCTION(asIDBDebugger::LineCallback), this, asCALL_CDECL);
+    ctx->SetExceptionCallback(asFUNCTION(asIDBDebugger::ExceptionCallback), this, asCALL_CDECL);
+}
+
+void asIDBDebugger::ClearHookedContexts()
+{
+    std::scoped_lock lock(mutex);
+    hooked_contexts.clear();
+}
+
 void asIDBDebugger::HookContext(asIScriptContext* ctx, bool has_work)
 {
     if (ctx->GetState() != asEXECUTION_EXCEPTION)
@@ -1388,8 +1661,7 @@ void asIDBDebugger::HookContext(asIScriptContext* ctx, bool has_work)
 
         if (has_work)
         {
-            int r = ctx->SetLineCallback(asFUNCTION(asIDBDebugger::LineCallback), this, asCALL_CDECL);
-            ASDebug_Log("SetLineCallback on ctx=%p returned %d", ctx, r);
+            ctx->SetLineCallback(asFUNCTION(asIDBDebugger::LineCallback), this, asCALL_CDECL);
         }
         ctx->SetExceptionCallback(asFUNCTION(asIDBDebugger::ExceptionCallback), this, asCALL_CDECL);
     }
@@ -1397,10 +1669,14 @@ void asIDBDebugger::HookContext(asIScriptContext* ctx, bool has_work)
 
 void asIDBDebugger::DebugBreak(asIScriptContext* ctx)
 {
-    ASDebug_Log("DebugBreak ENTERED! ctx=%p", ctx);
+    if (ASDebug_IsVerbose())
+    {
+        ASDebug_Log("DebugBreak ENTERED! ctx=%p", ctx);
+    }
     if (workspace->engines.find(ctx->GetEngine()) == workspace->engines.end())
     {
-        ASDebug_Log("DebugBreak IGNORED: engine %p not found!", ctx->GetEngine());
+        if (ASDebug_IsVerbose())
+            ASDebug_Log("DebugBreak IGNORED: engine %p not found!", ctx->GetEngine());
         return;
     }
 

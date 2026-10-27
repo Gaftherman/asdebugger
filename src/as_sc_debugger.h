@@ -15,6 +15,7 @@ public:
     virtual ~asSCDebugger() override;
 
     virtual std::string FetchSource(const char* section) override;
+    virtual void        SendLogOutput(const std::string& msg) override;
 
 protected:
     virtual void                        Suspend() override;

@@ -56,6 +56,9 @@ public:
             response.supportsLoadedSourcesRequest       = true;
             response.supportsReadMemoryRequest          = true;
             response.supportsExceptionInfoRequest       = true;
+            response.supportsConditionalBreakpoints     = true;
+            response.supportsHitConditionalBreakpoints  = true;
+            response.supportsLogPoints                  = true;
 
             dap::ExceptionBreakpointsFilter allFilter;
             allFilter.filter = "all";
@@ -322,8 +325,11 @@ public:
                     if (it == dbg->breakpoints.end())
                         it = dbg->breakpoints.insert({pathstrptr.section, asIDBSectionBreakpoints{}}).first;
 
-                    std::optional<int> colOpt = bp.column.has_value() ? std::optional<int>((int)closest.col) : std::nullopt;
-                    it->second.push_back({(int)closest.line, colOpt});
+                    std::optional<int> colOpt  = bp.column.has_value() ? std::optional<int>((int)closest.col) : std::nullopt;
+                    std::string        cond    = bp.condition.has_value() ? std::string(bp.condition.value()) : "";
+                    std::string        hitCond = bp.hitCondition.has_value() ? std::string(bp.hitCondition.value()) : "";
+                    std::string        logMsg  = bp.logMessage.has_value() ? std::string(bp.logMessage.value()) : "";
+                    it->second.push_back({(int)closest.line, colOpt, cond, hitCond, logMsg, 0});
                 }
             }
         }
@@ -435,18 +441,19 @@ public:
 
         dap::ScopesResponse response{};
 
-        if (!dbg->cache)
+        if (!dbg->cache || !dbg->cache->ctx)
             return response;
 
         bool found = false;
-
-        dbg->cache->CacheGlobals();
 
         for (auto& stack : dbg->cache->call_stack)
         {
             if (stack.id != request.frameId)
                 continue;
 
+            asIScriptModule* activeModule = stack.func ? stack.func->GetModule() : nullptr;
+
+            // 1. Locals
             if (!stack.scope.locals->namedProps.empty() ||
                 !stack.scope.locals->indexedProps.empty())
             {
@@ -455,8 +462,10 @@ public:
                 scope.presentationHint   = "locals";
                 scope.namedVariables     = stack.scope.locals->namedProps.size();
                 scope.indexedVariables   = stack.scope.locals->indexedProps.size();
-                scope.variablesReference = stack.scope.locals->expandRefId.value();
+                scope.variablesReference = stack.scope.locals->expandRefId.value_or(0);
             }
+
+            // 2. Parameters
             if (!stack.scope.parameters->namedProps.empty() ||
                 !stack.scope.parameters->indexedProps.empty())
             {
@@ -464,19 +473,69 @@ public:
                 scope.name               = "Parameters";
                 scope.presentationHint   = "parameters";
                 scope.namedVariables     = stack.scope.parameters->namedProps.size();
-                scope.indexedVariables   = stack.scope.locals->indexedProps.size();
-                scope.variablesReference = stack.scope.parameters->expandRefId.value();
+                scope.indexedVariables   = stack.scope.parameters->indexedProps.size();
+                scope.variablesReference = stack.scope.parameters->expandRefId.value_or(0);
             }
+
+            // 3. Temporaries (compiler internal registers)
             if (!stack.scope.registers->namedProps.empty() ||
                 !stack.scope.registers->indexedProps.empty())
             {
                 auto& scope              = response.scopes.emplace_back();
-                scope.name               = "Registers";
+                scope.name               = "Temporaries";
                 scope.presentationHint   = "registers";
                 scope.namedVariables     = stack.scope.registers->namedProps.size();
-                scope.indexedVariables   = stack.scope.locals->indexedProps.size();
-                scope.variablesReference = stack.scope.registers->expandRefId.value();
+                scope.indexedVariables   = stack.scope.registers->indexedProps.size();
+                scope.variablesReference = stack.scope.registers->expandRefId.value_or(0);
             }
+
+            // 4. Globals for the currently executing script module
+            if (activeModule)
+            {
+                dbg->cache->CacheGlobalsForModule(activeModule);
+                auto modVars = dbg->cache->GetModuleGlobals(activeModule);
+                if (modVars && (!modVars->namedProps.empty() || !modVars->indexedProps.empty()))
+                {
+                    auto&       scope        = response.scopes.emplace_back();
+                    const char* mName        = activeModule->GetName();
+                    scope.name               = (mName && *mName) ? fmt::format("Globals ({})", mName) : "Globals (Module)";
+                    scope.presentationHint   = "globals";
+                    scope.namedVariables     = modVars->namedProps.size();
+                    scope.indexedVariables   = modVars->indexedProps.size();
+                    scope.variablesReference = modVars->expandRefId.value_or(0);
+                }
+            }
+
+            // 5. Engine Global Properties (g_EngineFuncs, etc.)
+            dbg->cache->CacheEngineGlobals();
+            auto engVars = dbg->cache->GetEngineGlobals();
+            if (engVars && (!engVars->namedProps.empty() || !engVars->indexedProps.empty()))
+            {
+                auto& scope              = response.scopes.emplace_back();
+                scope.name               = "Engine Properties";
+                scope.presentationHint   = "globals";
+                scope.namedVariables     = engVars->namedProps.size();
+                scope.indexedVariables   = engVars->indexedProps.size();
+                scope.variablesReference = engVars->expandRefId.value_or(0);
+                scope.expensive          = true;
+            }
+
+            // 6. Other loaded script modules (if any)
+            if (activeModule)
+            {
+                auto otherMods = dbg->cache->GetOtherModules(activeModule);
+                if (otherMods && !otherMods->namedProps.empty())
+                {
+                    auto& scope              = response.scopes.emplace_back();
+                    scope.name               = "Other Modules";
+                    scope.presentationHint   = "globals";
+                    scope.namedVariables     = otherMods->namedProps.size();
+                    scope.indexedVariables   = 0;
+                    scope.variablesReference = otherMods->expandRefId.value_or(0);
+                    scope.expensive          = true;
+                }
+            }
+
             found = true;
             break;
         }
@@ -484,30 +543,25 @@ public:
         if (!found)
             return dap::Error{"invalid stack ID"};
 
-        if (!dbg->cache->globals->namedProps.empty() ||
-            !dbg->cache->globals->indexedProps.empty())
-        {
-            auto& scope              = response.scopes.emplace_back();
-            scope.name               = "Globals";
-            scope.presentationHint   = "globals";
-            scope.namedVariables     = dbg->cache->globals->namedProps.size();
-            scope.indexedVariables   = dbg->cache->globals->indexedProps.size();
-            scope.variablesReference = dbg->cache->globals->expandRefId.value();
-            scope.expensive          = true;
-        }
-
         return response;
     }
 
     dap::ResponseOrError<dap::VariablesResponse> HandleRequest(const dap::VariablesRequest& request)
     {
         std::scoped_lock lock(dbg->mutex);
-        auto             varit = dbg->cache->variable_refs.find(request.variablesReference);
+
+        if (!dbg->cache || !dbg->cache->ctx)
+            return dap::Error("no execution context or cache");
+
+        auto varit = dbg->cache->variable_refs.find(request.variablesReference);
 
         if (varit == dbg->cache->variable_refs.end())
             return dap::Error("invalid variablesReference");
 
-        auto                   varContainer = varit->second.lock();
+        auto varContainer = varit->second.lock();
+        if (!varContainer)
+            return dap::Error("variable container has expired");
+
         dap::VariablesResponse response{};
 
         varContainer->Evaluate();
@@ -541,10 +595,12 @@ public:
 
         if (!request.filter.has_value() || request.filter.value() == "indexed")
         {
-            int64_t start = request.start.has_value() ? (int64_t)request.start.value() : 0;
-            int64_t count = request.count.has_value() ? (int64_t)request.count.value() : varContainer->indexedProps.size();
+            int64_t start = request.start.has_value() ? std::max<int64_t>(0, (int64_t)request.start.value()) : 0;
+            int64_t total = (int64_t)varContainer->indexedProps.size();
+            int64_t count = request.count.has_value() ? std::max<int64_t>(0, (int64_t)request.count.value()) : total;
+            int64_t end   = std::min<int64_t>(start + count, total);
 
-            for (int64_t i = start; i < count; i++)
+            for (int64_t i = start; i < end; i++)
                 emplace_var(varContainer->indexedProps[i]);
         }
 
@@ -607,6 +663,8 @@ public:
             return dap::Error{result.error().data()};
 
         auto var = result.value().lock();
+        if (!var)
+            return dap::Error{"expression variable expired"};
 
         var->Evaluate();
 
@@ -714,8 +772,8 @@ void asIDBDAPServer::StartServer()
 
     if (!found)
     {
-        ASDebug_Log("WARNING: DAP server could not bind to port %d or fallback ports %d-%d (addresses already in use). DAP server disabled to avoid game hang.",
-                    port, port + 1, port + 10);
+        ASDebug_Notice("WARNING: DAP server could not bind to port %d or fallback ports %d-%d (addresses already in use). DAP server disabled to avoid game hang.",
+                       port, port + 1, port + 10);
         actual_port = 0;
         server.reset();
         return;
@@ -724,10 +782,10 @@ void asIDBDAPServer::StartServer()
     actual_port = candidatePort;
     if (actual_port != port)
     {
-        ASDebug_Log("NOTICE: Default DAP port %d is already in use. Automatically switched to fallback port %d.",
-                    port, actual_port);
-        ASDebug_Log("NOTICE: To attach from VS Code, set \"port\": %d in your launch.json, or close the application occupying port %d.",
-                    actual_port, port);
+        ASDebug_Notice("NOTICE: Default DAP port %d is already in use. Automatically switched to fallback port %d.",
+                       port, actual_port);
+        ASDebug_Notice("NOTICE: To attach from VS Code, set \"port\": %d in your launch.json, or close the application occupying port %d.",
+                       actual_port, port);
     }
 
     server       = dap::net::Server::create();
@@ -738,7 +796,7 @@ void asIDBDAPServer::StartServer()
 
     if (!started)
     {
-        ASDebug_Log("ERROR: dap::net::Server::start failed on port %d! DAP server disabled.", actual_port);
+        ASDebug_Notice("ERROR: dap::net::Server::start failed on port %d! DAP server disabled.", actual_port);
         actual_port = 0;
         server.reset();
     }

@@ -19,6 +19,17 @@ std::string asSCDebugger::FetchSource(const char* section)
     return {};
 }
 
+void asSCDebugger::SendLogOutput(const std::string& msg)
+{
+    if (dap_server)
+    {
+        dap::OutputEvent outEvent;
+        outEvent.category = "console";
+        outEvent.output   = msg;
+        dap_server->SendEventToClient(outEvent);
+    }
+}
+
 void asSCDebugger::Suspend()
 {
     if (dap_server)

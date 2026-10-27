@@ -31,8 +31,19 @@ typedef int (*fnExecute)(asIScriptContext* pThis);
 #endif
 static fnExecute g_pfnOriginalExecute = nullptr;
 static void**    g_pContextVtable     = nullptr;
+static bool      s_VerboseLogging     = false;
 
-void ASDebug_Log(const char* fmt, ...)
+void ASDebug_SetVerbose(bool enable)
+{
+    s_VerboseLogging = enable;
+}
+
+bool ASDebug_IsVerbose()
+{
+    return s_VerboseLogging;
+}
+
+void ASDebug_Notice(const char* fmt, ...)
 {
     va_list va;
     va_start(va, fmt);
@@ -44,7 +55,23 @@ void ASDebug_Log(const char* fmt, ...)
         LOG_MESSAGE(PLID, "%s", buf);
     }
     printf("[ASDEBUG] %s\n", buf);
-    fflush(stdout);
+}
+
+void ASDebug_Log(const char* fmt, ...)
+{
+    if (!s_VerboseLogging)
+        return;
+
+    va_list va;
+    va_start(va, fmt);
+    char buf[1024];
+    vsnprintf(buf, sizeof(buf), fmt, va);
+    va_end(va);
+    if (gpMetaUtilFuncs && gpMetaUtilFuncs->pfnLogMessage)
+    {
+        LOG_MESSAGE(PLID, "%s", buf);
+    }
+    printf("[ASDEBUG] %s\n", buf);
 }
 
 static int s_ExecuteCount = 0;
@@ -54,21 +81,16 @@ static int __fastcall Hooked_Execute(asIScriptContext* pThis, void* /*dummy*/)
 static int Hooked_Execute(asIScriptContext* pThis)
 #endif
 {
-    // Fast-path: if no debugger work is pending, bypass all mutex locks
+    // Fast-path: if debugger has work pending (breakpoints or stepping), ensure context is hooked
     if (g_Debugger && g_Debugger->has_work_atomic.load(std::memory_order_relaxed))
     {
-        if (g_Debugger->HasWork())
-        {
-            asIScriptFunction* fn = pThis->GetFunction(0);
-            ASDebug_Log("Hooked_Execute HAS WORK: ctx=%p, func=%s, state=%d",
-                        pThis, fn ? fn->GetName() : "null", (int)pThis->GetState());
-            g_Debugger->HookContext(pThis, true);
-        }
+        g_Debugger->HookContextOnce(pThis);
     }
 
     int ret = g_pfnOriginalExecute(pThis);
 
-    if (g_Debugger && g_Debugger->has_work_atomic.load(std::memory_order_relaxed))
+    // Only acquire mutex if this context was the one being stepped
+    if (g_Debugger && pThis == g_Debugger->stepping_context)
     {
         std::scoped_lock lock(g_Debugger->mutex);
         if (pThis == g_Debugger->stepping_context &&
@@ -166,9 +188,12 @@ void ASDebugger_ServerActivate(const char* gameDir)
     {
         ASDebugger_Init(gameDir);
     }
-    else if (g_Workspace)
+    else
     {
-        g_Workspace->CompileScriptSources();
+        if (g_Workspace)
+            g_Workspace->CompileScriptSources();
+        if (g_Debugger)
+            g_Debugger->ClearHookedContexts();
     }
 }
 
@@ -176,6 +201,9 @@ void ASDebugger_Init(const char* gameDir)
 {
     if (g_Debugger)
         return;
+
+    if (getenv("ASDEBUG_VERBOSE") != nullptr)
+        s_VerboseLogging = true;
 
 #ifndef _WIN32
     signal(SIGPIPE, SIG_IGN);

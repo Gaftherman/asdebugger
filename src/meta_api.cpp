@@ -7,6 +7,39 @@
 #include "serverdef.h"
 #include "asdebugger.h"
 
+#ifdef _WIN32
+#    include <windows.h>
+#    include <dbghelp.h>
+
+static LPTOP_LEVEL_EXCEPTION_FILTER g_PrevExceptionFilter = nullptr;
+
+static LONG WINAPI ASDebugger_UnhandledCrashHandler(EXCEPTION_POINTERS* pExceptionInfo)
+{
+    char       dumpPath[MAX_PATH];
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    snprintf(dumpPath, sizeof(dumpPath), "svencoop/addons/metamod/asdebugger_crash_%04d%02d%02d_%02d%02d%02d.mdmp",
+             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    HANDLE hFile = CreateFileA(dumpPath, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE)
+    {
+        MINIDUMP_EXCEPTION_INFORMATION mdei;
+        mdei.ThreadId          = GetCurrentThreadId();
+        mdei.ExceptionPointers = pExceptionInfo;
+        mdei.ClientPointers    = FALSE;
+
+        MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), hFile, MiniDumpNormal, &mdei, NULL, NULL);
+        CloseHandle(hFile);
+        printf("[ASDEBUG] Crash minidump written to %s\n", dumpPath);
+    }
+
+    if (g_PrevExceptionFilter)
+        return g_PrevExceptionFilter(pExceptionInfo);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
+
 IMPORT_ASEXT_API_DEFINE();
 
 // Plugin function tables provided to Metamod
@@ -27,7 +60,7 @@ static META_FUNCTIONS gMetaFunctionTable = {
 plugin_info_t Plugin_info = {
     "5:14",                                     // ifvers
     "AngelScriptDebugger",                      // name
-    "1.3.3",                                    // version
+    "1.4.0",                                    // version
     "2026",                                     // date
     "Gaftherman",                               // author
     "https://github.com/Gaftherman/asdebugger", // url
@@ -143,11 +176,22 @@ C_DLLEXPORT int Meta_Attach(PLUG_LOADTIME /* now */,
     const char* gameDir = GET_GAME_INFO(PLID, GINFO_GAMEDIR);
     ASDebugger_Init(gameDir);
 
+#ifdef _WIN32
+    g_PrevExceptionFilter = SetUnhandledExceptionFilter(ASDebugger_UnhandledCrashHandler);
+#endif
+
     return TRUE;
 }
 
 C_DLLEXPORT int Meta_Detach(PLUG_LOADTIME /* now */, PL_UNLOAD_REASON /* reason */)
 {
+#ifdef _WIN32
+    if (g_PrevExceptionFilter)
+    {
+        SetUnhandledExceptionFilter(g_PrevExceptionFilter);
+        g_PrevExceptionFilter = nullptr;
+    }
+#endif
     ASDebugger_Shutdown();
     return TRUE;
 }
