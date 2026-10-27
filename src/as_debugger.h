@@ -576,6 +576,14 @@ public:
     asUINT      stack_size = 0; // for certain actions (like Step Over) we have to know
                                 // the size of the old stack.
 
+    // Active context and function being stepped, to prevent stepping
+    // in one module from accidentally catching execution in another module's context
+    asIScriptContext* stepping_context     = nullptr;
+    int               stepping_function_id = -1;
+
+    // Filter exceptions: only pause if explicitly requested by DAP client
+    bool break_on_exceptions = false;
+
     // if true, line callback will not execute
     // (used to prevent infinite loops)
     std::atomic_bool internal_execution = false;

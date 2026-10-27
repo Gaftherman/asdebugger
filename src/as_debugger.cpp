@@ -1145,42 +1145,73 @@ void asIDBFileWorkspace::CompileBreakpointPositions()
     if (debugger->internal_execution)
         return;
 
+    const char* section = nullptr;
+    int         col;
+    int         row = ctx->GetLineNumber(0, &col, &section);
+
     // we might not have an action - functions called from within
     // the debugger will never have this set.
     if (debugger->action != asIDBAction::None)
     {
-        // Step Into just breaks on whatever happens to be next.
-        if (debugger->action == asIDBAction::Pause ||
-            debugger->action == asIDBAction::StepInto)
+        // 1. If stepping was initiated from a specific context, do not step into other unrelated contexts
+        if (debugger->stepping_context && ctx != debugger->stepping_context)
         {
-            debugger->DebugBreak(ctx);
-            return;
+            // Do not break for foreign context stepping
         }
-        // Step Over breaks on the next line that is <= the
-        // current stack level.
-        else if (debugger->action == asIDBAction::StepOver)
+        // 2. Do not break inside virtual engine sections (like __Global__BaseAnimating) during stepping
+        else if (section && debugger->workspace && debugger->workspace->SectionIsVirtual(section))
         {
-            if (ctx->GetCallstackSize() <= debugger->stack_size)
-                debugger->DebugBreak(ctx);
-            return;
+            // Skip stepping into virtual/native engine glue
         }
-        // Step Out breaks on the next line that is < the
-        // current stack level.
-        else if (debugger->action == asIDBAction::StepOut)
+        else
         {
-            if (ctx->GetCallstackSize() < debugger->stack_size)
-                debugger->DebugBreak(ctx);
-            return;
+            auto        func      = ctx->GetFunction(0);
+            const char* funcName  = func ? func->GetName() : nullptr;
+            bool        isUnnamed = funcName && std::strcmp(funcName, "_unnamed_function_") == 0;
+
+            // Step Into just breaks on whatever happens to be next (except foreign unnamed functions).
+            if (debugger->action == asIDBAction::Pause ||
+                debugger->action == asIDBAction::StepInto)
+            {
+                if (!isUnnamed || debugger->stepping_function_id == (func ? func->GetId() : -1))
+                {
+                    debugger->DebugBreak(ctx);
+                    return;
+                }
+            }
+            // Step Over breaks on the next line that is <= the
+            // current stack level.
+            else if (debugger->action == asIDBAction::StepOver)
+            {
+                if (ctx->GetCallstackSize() <= debugger->stack_size)
+                {
+                    if (!isUnnamed || debugger->stepping_function_id == (func ? func->GetId() : -1))
+                    {
+                        debugger->DebugBreak(ctx);
+                        return;
+                    }
+                }
+            }
+            // Step Out breaks on the next line that is < the
+            // current stack level.
+            else if (debugger->action == asIDBAction::StepOut)
+            {
+                if (ctx->GetCallstackSize() < debugger->stack_size)
+                {
+                    if (!isUnnamed || debugger->stepping_function_id == (func ? func->GetId() : -1))
+                    {
+                        debugger->DebugBreak(ctx);
+                        return;
+                    }
+                }
+            }
         }
     }
 
     // breakpoints are handled here. note that a single
     // breakpoint can be hit by multiple things on the same
     // line.
-    bool        break_from_bp = false;
-    const char* section       = nullptr;
-    int         col;
-    int         row = ctx->GetLineNumber(0, &col, &section);
+    bool break_from_bp = false;
 
     if (section)
     {
@@ -1247,8 +1278,14 @@ void asIDBFileWorkspace::CompileBreakpointPositions()
 
 /*static*/ void asIDBDebugger::ExceptionCallback(asIScriptContext* ctx, asIDBDebugger* debugger)
 {
-    if (!debugger->internal_execution)
-        debugger->DebugBreak(ctx);
+    if (debugger->internal_execution)
+        return;
+
+    // Only break on exceptions if explicitly enabled by the DAP client (setExceptionBreakpoints)
+    if (!debugger->break_on_exceptions)
+        return;
+
+    debugger->DebugBreak(ctx);
 }
 
 void asIDBDebugger::HookContext(asIScriptContext* ctx, bool has_work)
@@ -1272,6 +1309,8 @@ void asIDBDebugger::DebugBreak(asIScriptContext* ctx)
     {
         std::scoped_lock lock(mutex);
         action                                = asIDBAction::None;
+        stepping_context                      = nullptr;
+        stepping_function_id                  = -1;
         std::unique_ptr<asIDBCache> new_cache = CreateCache(ctx);
 
         if (cache)
@@ -1306,13 +1345,25 @@ void asIDBDebugger::SetAction(asIDBAction new_action)
     if (new_action == asIDBAction::None)
         return;
 
-    if (new_action != asIDBAction::Continue)
     {
         std::scoped_lock lock(mutex);
-        action = new_action;
+        if (new_action == asIDBAction::Continue)
+        {
+            action               = asIDBAction::None;
+            stepping_context     = nullptr;
+            stepping_function_id = -1;
+        }
+        else
+        {
+            action               = new_action;
+            stepping_context     = cache ? cache->ctx : nullptr;
+            stepping_function_id = (cache && cache->ctx && cache->ctx->GetFunction(0)) ?
+                cache->ctx->GetFunction(0)->GetId() :
+                -1;
 
-        if (cache)
-            stack_size = cache->ctx->GetCallstackSize();
+            if (cache)
+                stack_size = cache->ctx->GetCallstackSize();
+        }
     }
 
     Resume();

@@ -75,6 +75,9 @@ std::string asSCWorkspace::PathToSection(const std::string_view v) const
 
 std::string asSCWorkspace::SectionToPath(const std::string_view v) const
 {
+    if (v.empty() || v.rfind("__", 0) == 0)
+        return {};
+
     std::string sectionStr(v);
     std::replace(sectionStr.begin(), sectionStr.end(), '\\', '/');
 
@@ -96,12 +99,38 @@ std::string asSCWorkspace::SectionToPath(const std::string_view v) const
             return scriptsPath;
     }
 
-    return fullPath;
+    return {};
+}
+
+bool asSCWorkspace::SectionIsVirtual(const std::string_view v) const
+{
+    if (v.empty())
+        return true;
+
+    // Sections starting with "__" (e.g. __Global__BaseAnimating, __Shared__, etc.)
+    if (v.rfind("__", 0) == 0)
+        return true;
+
+    std::string path = SectionToPath(v);
+    if (path.empty())
+        return true;
+
+    std::error_code ec;
+    return !std::filesystem::exists(path, ec);
 }
 
 std::string asSCWorkspace::SectionSource(const std::string_view v) const
 {
-    std::string           resolvedPath = SectionToPath(v);
+    if (SectionIsVirtual(v))
+    {
+        return std::string("// [Virtual Engine Binding: ") + std::string(v) +
+            "]\n// Native class or interface wrapper provided in-memory by Sven Co-op engine.\n";
+    }
+
+    std::string resolvedPath = SectionToPath(v);
+    if (resolvedPath.empty())
+        return {};
+
     std::error_code       ec;
     std::filesystem::path p(resolvedPath);
 

@@ -32,6 +32,18 @@ public:
             response.supportsLoadedSourcesRequest       = true;
             response.supportsReadMemoryRequest          = true;
             response.supportsExceptionInfoRequest       = true;
+
+            dap::ExceptionBreakpointsFilter allFilter;
+            allFilter.filter = "all";
+            allFilter.label  = "All Exceptions";
+            allFilter.def    = false;
+
+            dap::ExceptionBreakpointsFilter uncaughtFilter;
+            uncaughtFilter.filter = "uncaught";
+            uncaughtFilter.label  = "Uncaught Exceptions";
+            uncaughtFilter.def    = false;
+
+            response.exceptionBreakpointFilters = dap::array<dap::ExceptionBreakpointsFilter>{allFilter, uncaughtFilter};
             return response;
         });
 
@@ -40,6 +52,8 @@ public:
             [&](const dap::SetBreakpointsRequest& request) { return this->HandleRequest(request); });
         session->registerHandler(
             [&](const dap::SetFunctionBreakpointsRequest& request) { return this->HandleRequest(request); });
+        session->registerHandler(
+            [&](const dap::SetExceptionBreakpointsRequest& request) { return this->HandleRequest(request); });
         session->registerHandler(
             [&](const dap::ConfigurationDoneRequest& request) { return this->HandleRequest(request); });
         session->registerHandler([&](const dap::ThreadsRequest& request) { return this->HandleRequest(request); });
@@ -131,9 +145,18 @@ public:
         {
             auto& src = response.sources.emplace_back();
             src.name  = source.section;
-            src.path  = dbg->workspace->SectionToPath(source.section);
             if (dbg->workspace->SectionIsVirtual(source.section))
+            {
                 src.sourceReference = source.ref;
+            }
+            else
+            {
+                auto resolved = dbg->workspace->SectionToPath(source.section);
+                if (!resolved.empty())
+                    src.path = resolved;
+                else
+                    src.sourceReference = source.ref;
+            }
         }
 
         return response;
@@ -143,14 +166,29 @@ public:
     {
         dap::SourceResponse response{};
 
-        auto source_it = dbg->workspace->sections.find(std::string_view(request.source->name.value()));
+        if (request.source && request.source->name)
+        {
+            auto name = request.source->name.value();
+            if (dbg->workspace)
+            {
+                response.content = dbg->workspace->SectionSource(name);
+                return response;
+            }
+        }
 
-        if (source_it == dbg->workspace->sections.end())
-            return dap::Error("can't find source");
+        if (request.sourceReference > 0 && dbg->workspace)
+        {
+            for (auto& sec : dbg->workspace->sections)
+            {
+                if (sec.ref == (uint64_t)request.sourceReference)
+                {
+                    response.content = dbg->workspace->SectionSource(sec.section);
+                    return response;
+                }
+            }
+        }
 
-        response.content = dbg->workspace->SectionSource(request.source->name.value());
-
-        return response;
+        return dap::Error("can't find source");
     }
 
     dap::BreakpointLocationsResponse HandleRequest(const dap::BreakpointLocationsRequest& request)
@@ -279,6 +317,13 @@ public:
         return response;
     }
 
+    dap::SetExceptionBreakpointsResponse HandleRequest(const dap::SetExceptionBreakpointsRequest& request)
+    {
+        std::scoped_lock lock(dbg->mutex);
+        dbg->break_on_exceptions = !request.filters.empty();
+        return {};
+    }
+
     dap::ConfigurationDoneResponse HandleRequest(const dap::ConfigurationDoneRequest& request)
     {
         return {};
@@ -324,8 +369,20 @@ public:
                 frame.line   = stack.row;
                 frame.column = stack.column;
                 dap::Source src;
-                src.path     = dbg->workspace->SectionToPath(stack.section);
-                src.name     = std::string(stack.section);
+                if (dbg->workspace && dbg->workspace->SectionIsVirtual(stack.section))
+                {
+                    src.sourceReference = (int64_t)stack.id + 1000;
+                    src.name            = std::string(stack.section);
+                }
+                else
+                {
+                    auto resolved = dbg->workspace ? dbg->workspace->SectionToPath(stack.section) : std::string(stack.section);
+                    if (!resolved.empty())
+                        src.path = resolved;
+                    else
+                        src.sourceReference = (int64_t)stack.id + 1000;
+                    src.name = std::string(stack.section);
+                }
                 frame.source = std::move(src);
             }
             else

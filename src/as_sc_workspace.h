@@ -15,10 +15,7 @@ public:
     virtual std::string PathToSection(const std::string_view v) const override;
     virtual std::string SectionToPath(const std::string_view v) const override;
 
-    virtual bool SectionIsVirtual(const std::string_view v) const override
-    {
-        return false;
-    }
+    virtual bool SectionIsVirtual(const std::string_view v) const override;
 
     virtual std::string SectionSource(const std::string_view v) const override;
 

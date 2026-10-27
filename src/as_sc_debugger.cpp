@@ -24,19 +24,44 @@ void asSCDebugger::Suspend()
     if (dap_server)
     {
         dap::StoppedEvent event;
-        switch (action)
+        bool              isException = (cache && cache->ctx && cache->ctx->GetState() == asEXECUTION_EXCEPTION);
+
+        if (isException)
         {
-            case asIDBAction::Pause:
-                event.reason = "pause";
-                break;
-            case asIDBAction::StepInto:
-            case asIDBAction::StepOver:
-            case asIDBAction::StepOut:
-                event.reason = "step";
-                break;
-            default:
-                event.reason = "breakpoint";
-                break;
+            event.reason      = "exception";
+            const char* exStr = cache->ctx->GetExceptionString();
+            if (exStr)
+            {
+                event.description = exStr;
+                event.text        = exStr;
+
+                int         col     = 0;
+                const char* section = nullptr;
+                int         row     = cache->ctx->GetLineNumber(0, &col, &section);
+
+                dap::OutputEvent outEvent;
+                outEvent.category = "stderr";
+                outEvent.output   = std::string("[AngelScript Exception] ") + exStr +
+                    " in '" + (section ? section : "unknown") + "':" + std::to_string(row) + "\n";
+                dap_server->SendEventToClient(outEvent);
+            }
+        }
+        else
+        {
+            switch (action)
+            {
+                case asIDBAction::Pause:
+                    event.reason = "pause";
+                    break;
+                case asIDBAction::StepInto:
+                case asIDBAction::StepOver:
+                case asIDBAction::StepOut:
+                    event.reason = "step";
+                    break;
+                default:
+                    event.reason = "breakpoint";
+                    break;
+            }
         }
 
         event.threadId          = 1;
