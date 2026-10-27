@@ -15,6 +15,7 @@
 #include <unordered_set>
 
 #include "as_helpers.h"
+#include <asext_api.h>
 #include <std_string.h>
 
 void ASDebug_Log(const char* fmt, ...);
@@ -299,6 +300,20 @@ protected:
     // address (and object, if set) of the given type. If positive,
     // a specific index will be used.
     void QueryVariableForEach(asIDBVariable::Ptr var, int index = -1) const;
+};
+
+class asIDBArrayTypeEvaluator : public asIDBTypeEvaluator
+{
+public:
+    virtual void Evaluate(asIDBVariable::Ptr var) const override;
+    virtual void Expand(asIDBVariable::Ptr var) const override;
+};
+
+class asIDBDictionaryTypeEvaluator : public asIDBTypeEvaluator
+{
+public:
+    virtual void Evaluate(asIDBVariable::Ptr var) const override;
+    virtual void Expand(asIDBVariable::Ptr var) const override;
 };
 
 // this class holds the cached state of stuff

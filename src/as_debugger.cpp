@@ -708,22 +708,243 @@ void* asIDBCache::ResolvePropertyAddress(const asIDBVarAddr& id, int propertyInd
 
 #ifdef _WIN32
 #    include <windows.h>
-static bool SafeReadStdString(std_string* strPtr, const char*& out_cstr, size_t& out_len)
+
+struct DictEntryRaw
+{
+    const CString* keyObj;
+    void*          node;
+};
+
+static bool SafeGetDictSize(CScriptDictionary* dict, unsigned int& out_count)
 {
     __try
     {
-        size_t cap = strPtr->capacity();
-        size_t len = strPtr->len();
-        if (len > 1000000 || cap < len)
+        if (!dict || !ASEXT_CScriptDictionary_GetSize)
             return false;
-        out_len  = len;
-        out_cstr = strPtr->c_str();
-        return (out_cstr != nullptr);
+        out_count = ASEXT_CScriptDictionary_GetSize(dict);
+        return true;
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
         return false;
     }
+}
+
+static size_t SafeIterateDict(CScriptDictionary* dict, DictEntryRaw* out_entries, size_t max_entries)
+{
+    __try
+    {
+        if (!dict || !ASEXT_CScriptDictionary_begin || !ASEXT_CScriptDictionary_end ||
+            !ASEXT_CScriptDictionary_CIterator_operator_NE || !ASEXT_CScriptDictionary_CIterator_operator_PP ||
+            !ASEXT_CScriptDictionary_CIterator_GetKey)
+            return 0;
+
+        CScriptDictionary_CIterator it{}, itend{};
+        ASEXT_CScriptDictionary_begin(dict, &it);
+        ASEXT_CScriptDictionary_end(dict, &itend);
+
+        size_t count = 0;
+        while (ASEXT_CScriptDictionary_CIterator_operator_NE(&it, &itend) && count < max_entries)
+        {
+            out_entries[count].keyObj = ASEXT_CScriptDictionary_CIterator_GetKey(&it);
+            out_entries[count].node   = it.cur;
+            count++;
+            ASEXT_CScriptDictionary_CIterator_operator_PP(&it);
+        }
+        return count;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return 0;
+    }
+}
+
+static bool SafeReadCString(const void* ptr, char* out_buf, size_t buf_size, size_t& out_len, bool& out_truncated)
+{
+    __try
+    {
+        if (!ptr)
+            return false;
+        const CString* cstr = reinterpret_cast<const CString*>(ptr);
+        size_t         len  = cstr->m_len;
+        size_t         cap  = cstr->m_capacity;
+        const char*    p    = cstr->m_ptr;
+        if (len > 1000000 || cap < len || !p)
+            return false;
+
+        out_len        = len;
+        size_t to_copy = (len >= buf_size) ? (buf_size - 1) : len;
+        out_truncated  = (len >= buf_size);
+
+        for (size_t i = 0; i < to_copy; i++)
+        {
+            out_buf[i] = p[i];
+        }
+        out_buf[to_copy] = '\0';
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static bool SafeReadStdString(const void* ptr, char* out_buf, size_t buf_size, size_t& out_len, bool& out_truncated)
+{
+    __try
+    {
+        if (!ptr)
+            return false;
+        const std_string* strPtr = reinterpret_cast<const std_string*>(ptr);
+        size_t            cap    = strPtr->capacity();
+        size_t            len    = strPtr->len();
+        if (len > 1000000 || cap < len)
+            return false;
+
+        const char* c_str = const_cast<std_string*>(strPtr)->c_str();
+        if (!c_str)
+            return false;
+
+        out_len        = len;
+        size_t to_copy = (len >= buf_size) ? (buf_size - 1) : len;
+        out_truncated  = (len >= buf_size);
+
+        for (size_t i = 0; i < to_copy; i++)
+        {
+            out_buf[i] = c_str[i];
+        }
+        out_buf[to_copy] = '\0';
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+
+static bool SafeInspectScriptArray(const void* ptr, size_t& out_count, void*& out_data, int& out_elemTypeId, int& out_elemSize)
+{
+    __try
+    {
+        if (!ptr)
+            return false;
+        const CScriptArray* arr = reinterpret_cast<const CScriptArray*>(ptr);
+        CScriptArrayBuffer* buf = arr->m_buffer;
+        out_elemTypeId          = arr->m_ElementTypeId;
+        out_elemSize            = arr->m_unk4;
+
+        if (!buf)
+        {
+            out_count = 0;
+            out_data  = nullptr;
+            return true;
+        }
+
+        int count = buf->m_size;
+        if (count < 0 || count > 1000000)
+            return false;
+
+        out_count = static_cast<size_t>(count);
+        out_data  = buf->data();
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
+#else
+static bool SafeReadCString(const void* ptr, char* out_buf, size_t buf_size, size_t& out_len, bool& out_truncated)
+{
+    if (!ptr)
+        return false;
+    const CString* cstr = reinterpret_cast<const CString*>(ptr);
+    size_t         len  = cstr->m_len;
+    size_t         cap  = cstr->m_capacity;
+    const char*    p    = cstr->m_ptr;
+    if (len > 1000000 || cap < len || !p)
+        return false;
+    out_len        = len;
+    size_t to_copy = (len >= buf_size) ? (buf_size - 1) : len;
+    out_truncated  = (len >= buf_size);
+    memcpy(out_buf, p, to_copy);
+    out_buf[to_copy] = '\0';
+    return true;
+}
+
+static bool SafeReadStdString(const void* ptr, char* out_buf, size_t buf_size, size_t& out_len, bool& out_truncated)
+{
+    if (!ptr)
+        return false;
+    const std_string* strPtr = reinterpret_cast<const std_string*>(ptr);
+    size_t            cap    = strPtr->capacity();
+    size_t            len    = strPtr->len();
+    if (len > 1000000 || cap < len)
+        return false;
+    const char* c_str = const_cast<std_string*>(strPtr)->c_str();
+    if (!c_str)
+        return false;
+    out_len        = len;
+    size_t to_copy = (len >= buf_size) ? (buf_size - 1) : len;
+    out_truncated  = (len >= buf_size);
+    memcpy(out_buf, c_str, to_copy);
+    out_buf[to_copy] = '\0';
+    return true;
+}
+
+static bool SafeInspectScriptArray(const void* ptr, size_t& out_count, void*& out_data, int& out_elemTypeId, int& out_elemSize)
+{
+    if (!ptr)
+        return false;
+    const CScriptArray* arr = reinterpret_cast<const CScriptArray*>(ptr);
+    CScriptArrayBuffer* buf = arr->m_buffer;
+    out_elemTypeId          = arr->m_ElementTypeId;
+    out_elemSize            = arr->m_unk4;
+
+    if (!buf)
+    {
+        out_count = 0;
+        out_data  = nullptr;
+        return true;
+    }
+
+    int count = buf->m_size;
+    if (count < 0 || count > 1000000)
+        return false;
+
+    out_count = static_cast<size_t>(count);
+    out_data  = buf->data();
+    return true;
+}
+
+static bool SafeGetDictSize(CScriptDictionary* dict, unsigned int& out_count)
+{
+    if (!dict || !ASEXT_CScriptDictionary_GetSize)
+        return false;
+    out_count = ASEXT_CScriptDictionary_GetSize(dict);
+    return true;
+}
+
+static size_t SafeIterateDict(CScriptDictionary* dict, DictEntryRaw* out_entries, size_t max_entries)
+{
+    if (!dict || !ASEXT_CScriptDictionary_begin || !ASEXT_CScriptDictionary_end ||
+        !ASEXT_CScriptDictionary_CIterator_operator_NE || !ASEXT_CScriptDictionary_CIterator_operator_PP ||
+        !ASEXT_CScriptDictionary_CIterator_GetKey)
+        return 0;
+
+    CScriptDictionary_CIterator it{}, itend{};
+    ASEXT_CScriptDictionary_begin(dict, &it);
+    ASEXT_CScriptDictionary_end(dict, &itend);
+
+    size_t count = 0;
+    while (ASEXT_CScriptDictionary_CIterator_operator_NE(&it, &itend) && count < max_entries)
+    {
+        out_entries[count].keyObj = ASEXT_CScriptDictionary_CIterator_GetKey(&it);
+        out_entries[count].node   = it.cur;
+        count++;
+        ASEXT_CScriptDictionary_CIterator_operator_PP(&it);
+    }
+    return count;
 }
 #endif
 
@@ -738,45 +959,55 @@ public:
             return;
         }
 
-        auto strPtr = var->address.ResolveAs<std_string>();
-        if (!strPtr)
+        void* rawPtr = var->address.ResolveAs<void>();
+        if (!rawPtr)
         {
             var->value = "(null)";
             return;
         }
 
-        const char* c_str = nullptr;
-        size_t      len   = 0;
+        auto   ctx      = var->dbg.cache ? var->dbg.cache->ctx : nullptr;
+        auto   engine   = ctx ? ctx->GetEngine() : nullptr;
+        auto   type     = engine ? engine->GetTypeInfoById(var->address.typeId) : nullptr;
+        size_t typeSize = type ? type->GetSize() : 0;
 
-#ifdef _WIN32
-        if (!SafeReadStdString(strPtr, c_str, len))
-        {
-            var->value = "\"(invalid string)\"";
-            return;
-        }
-#else
-        len = strPtr->len();
-        if (len > 1000000)
-        {
-            var->value = "\"(invalid string)\"";
-            return;
-        }
-        c_str = strPtr->c_str();
-#endif
+        char   buf[257];
+        size_t len       = 0;
+        bool   truncated = false;
+        bool   ok        = false;
 
-        if (!c_str)
+        if (typeSize == 36 || typeSize == sizeof(CString))
         {
-            var->value = "\"\"";
-            return;
+            ok = SafeReadCString(rawPtr, buf, sizeof(buf), len, truncated);
+            if (!ok)
+                ok = SafeReadStdString(rawPtr, buf, sizeof(buf), len, truncated);
         }
-
-        if (len > 256)
+        else if (typeSize == 24 || typeSize == sizeof(std_string))
         {
-            var->value = fmt::format("\"{}...\" (len={})", std::string_view(c_str, 256), len);
+            ok = SafeReadStdString(rawPtr, buf, sizeof(buf), len, truncated);
+            if (!ok)
+                ok = SafeReadCString(rawPtr, buf, sizeof(buf), len, truncated);
         }
         else
         {
-            var->value = fmt::format("\"{}\"", std::string_view(c_str, len));
+            ok = SafeReadCString(rawPtr, buf, sizeof(buf), len, truncated);
+            if (!ok)
+                ok = SafeReadStdString(rawPtr, buf, sizeof(buf), len, truncated);
+        }
+
+        if (!ok)
+        {
+            var->value = "\"(invalid string)\"";
+            return;
+        }
+
+        if (truncated || len > 256)
+        {
+            var->value = fmt::format("\"{}...\" (len={})", std::string_view(buf, std::min<size_t>(len, sizeof(buf) - 1)), len);
+        }
+        else
+        {
+            var->value = fmt::format("\"{}\"", std::string_view(buf, len));
         }
     }
 };
@@ -1211,6 +1442,169 @@ void asIDBObjectTypeEvaluator::QueryVariableForEach(asIDBVariable::Ptr var, int 
     cache.dbg.internal_execution = false;
 }
 
+void asIDBArrayTypeEvaluator::Evaluate(asIDBVariable::Ptr var) const
+{
+    if (!var || !var->address.address)
+    {
+        var->value      = "(null)";
+        var->expandable = false;
+        return;
+    }
+
+    void* objPtr = var->address.ResolveAs<void>();
+    if (!objPtr)
+    {
+        var->value      = "(null)";
+        var->expandable = false;
+        return;
+    }
+
+    size_t count      = 0;
+    void*  data       = nullptr;
+    int    elemTypeId = 0;
+    int    elemSize   = 0;
+
+    if (!SafeInspectScriptArray(objPtr, count, data, elemTypeId, elemSize))
+    {
+        var->value      = "\"(invalid array)\"";
+        var->expandable = false;
+        return;
+    }
+
+    var->value      = fmt::format("{} elements", count);
+    var->expandable = (count > 0);
+}
+
+void asIDBArrayTypeEvaluator::Expand(asIDBVariable::Ptr var) const
+{
+    if (!var || !var->address.address)
+        return;
+
+    void* objPtr = var->address.ResolveAs<void>();
+    if (!objPtr)
+        return;
+
+    size_t count      = 0;
+    void*  data       = nullptr;
+    int    elemTypeId = 0;
+    int    elemSize   = 0;
+
+    if (!SafeInspectScriptArray(objPtr, count, data, elemTypeId, elemSize))
+        return;
+
+    if (count == 0 || !data)
+        return;
+
+    auto ctx    = var->dbg.cache ? var->dbg.cache->ctx : nullptr;
+    auto engine = ctx ? ctx->GetEngine() : nullptr;
+
+    if (engine && elemTypeId <= 0)
+    {
+        auto type = engine->GetTypeInfoById(var->address.typeId);
+        if (type)
+            elemTypeId = type->GetSubTypeId();
+    }
+
+    std::string_view elemTypeName = "";
+    if (var->dbg.cache)
+        elemTypeName = var->dbg.cache->GetTypeNameFromType({elemTypeId, asTM_NONE});
+
+    if (elemSize <= 0 && engine)
+    {
+        auto subType = engine->GetTypeInfoById(elemTypeId);
+        if (subType)
+            elemSize = subType->GetSize();
+        else
+            elemSize = engine->GetSizeOfPrimitiveType(elemTypeId);
+    }
+
+    if (elemSize <= 0)
+        elemSize = 4;
+
+    for (size_t i = 0; i < count; i++)
+    {
+        void* elemAddr = static_cast<char*>(data) + i * elemSize;
+        var->CreateChildVariable(fmt::format("[{}]", i), asIDBVarAddr{elemTypeId, false, elemAddr}, elemTypeName);
+    }
+}
+
+void asIDBDictionaryTypeEvaluator::Evaluate(asIDBVariable::Ptr var) const
+{
+    if (!var || !var->address.address)
+    {
+        var->value      = "(null)";
+        var->expandable = false;
+        return;
+    }
+
+    void* objPtr = var->address.ResolveAs<void>();
+    if (!objPtr)
+    {
+        var->value      = "(null)";
+        var->expandable = false;
+        return;
+    }
+
+    unsigned int count = 0;
+    if (!SafeGetDictSize(reinterpret_cast<CScriptDictionary*>(objPtr), count))
+    {
+        var->value      = "\"(invalid dictionary)\"";
+        var->expandable = false;
+        return;
+    }
+
+    var->value      = fmt::format("{} entries", count);
+    var->expandable = (count > 0);
+}
+
+void asIDBDictionaryTypeEvaluator::Expand(asIDBVariable::Ptr var) const
+{
+    if (!var || !var->address.address)
+        return;
+
+    void* objPtr = var->address.ResolveAs<void>();
+    if (!objPtr)
+        return;
+
+    std::vector<DictEntryRaw> entries(1000);
+    size_t                    count = SafeIterateDict(reinterpret_cast<CScriptDictionary*>(objPtr), entries.data(), entries.size());
+
+    for (size_t i = 0; i < count; i++)
+    {
+        const CString* keyObj = entries[i].keyObj;
+        char           keyBuf[257];
+        size_t         keyLen    = 0;
+        bool           truncated = false;
+        std::string    keyName;
+        if (keyObj && SafeReadCString(keyObj, keyBuf, sizeof(keyBuf), keyLen, truncated))
+        {
+            keyName = std::string(keyBuf, keyLen);
+        }
+        else
+        {
+            keyName = fmt::format("entry_{}", i);
+        }
+
+        void* node = entries[i].node;
+        if (node)
+        {
+            int   valTypeId = *reinterpret_cast<int*>(static_cast<char*>(node) + 0x38);
+            void* valAddr   = static_cast<char*>(node) + 0x30;
+
+            if ((valTypeId & asTYPEID_MASK_OBJECT) && !(valTypeId & asTYPEID_OBJHANDLE))
+            {
+                valAddr = *reinterpret_cast<void**>(valAddr);
+            }
+
+            std::string_view typeName = "";
+            if (var->dbg.cache)
+                typeName = var->dbg.cache->GetTypeNameFromType({valTypeId, asTM_NONE});
+
+            var->CreateChildVariable(keyName, asIDBVarAddr{valTypeId, false, valAddr}, typeName);
+        }
+    }
+}
+
 const asIDBTypeEvaluator& asIDBCache::GetEvaluator(const asIDBVarAddr& id) const
 {
     // the only way the base address is null is if
@@ -1310,6 +1704,16 @@ const asIDBTypeEvaluator& asIDBCache::GetEvaluator(const asIDBVarAddr& id) const
     {
         static const asIDBStringTypeEvaluator stringType;
         return stringType;
+    }
+    else if (typeName && (strcmp(typeName, "array") == 0 || (type->GetFlags() & asOBJ_TEMPLATE)))
+    {
+        static const asIDBArrayTypeEvaluator arrayType;
+        return arrayType;
+    }
+    else if (typeName && strcmp(typeName, "dictionary") == 0)
+    {
+        static const asIDBDictionaryTypeEvaluator dictType;
+        return dictType;
     }
 
     // finally, just return the base one.
