@@ -1,0 +1,6 @@
+/build/
+/install/
+/.clang-format
+/.vs/
+__pycache__/
+*.pyc
