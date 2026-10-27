@@ -160,7 +160,7 @@ DebugBreak();
 
 - Branch pushes and pull requests build Windows and Linux x86 Debug/Release,
   run smoke tests and formatting checks, and package complete release artifacts.
-- Pushing any new tag (e.g., `git tag v1.0.0 && git push origin v1.0.0`) triggers
+- Pushing any new tag (e.g., `git tag v1.1.0 && git push origin v1.1.0`) triggers
   the release workflow and publishes a GitHub Release with prebuilt binaries.
 - Packages retain the `build/addons/` layout with `dependencies.json` recording
   exact Git submodule revisions.
