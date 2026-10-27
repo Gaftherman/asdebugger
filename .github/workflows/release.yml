@@ -12,7 +12,7 @@ jobs:
     uses: ./.github/workflows/build.yml
     with:
       ref: ${{ github.sha }}
-      release_only: true
+      release_only: false
   publish:
     needs: build
     runs-on: ubuntu-24.04
@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: astemplate-*-x86-Release
+          pattern: asdebugger-*-x86-*
           merge-multiple: true
           path: packages
       - name: Create release and upload packages

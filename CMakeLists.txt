@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 option(FORMAT_VALIDATION_ONLY "Configure formatting without native dependencies" OFF)
 if(FORMAT_VALIDATION_ONLY)
-    project(ASTemplateFormat LANGUAGES NONE)
+    project(ASDebuggerFormat LANGUAGES NONE)
     include(cmake/FormatValidation.cmake)
     return()
 endif()
@@ -12,7 +12,7 @@ endif()
 set(METAMOD_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/metamod")
 set(ASEXT_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/asext")
 include("${METAMOD_SOURCE_PATH}/cmake/Platform.cmake")
-project(astemplate VERSION 0.1.0 LANGUAGES C CXX)
+project(asdebugger VERSION 1.0.0 LANGUAGES C CXX)
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
 endif()
@@ -21,22 +21,60 @@ mmfg_configure_install_layout()
 add_subdirectory(metamod)
 add_subdirectory(asext)
 
-add_library(astemplate SHARED src/plugin.cpp)
-mmfg_configure_target(astemplate)
-target_link_libraries(astemplate PRIVATE ASExt::SDK)
-target_compile_definitions(astemplate PRIVATE ASTEMPLATE_VERSION="${PROJECT_VERSION}")
+# Fetch cppdap (Debug Adapter Protocol implementation)
+include(FetchContent)
+FetchContent_Declare(
+    cppdap
+    GIT_REPOSITORY https://github.com/google/cppdap.git
+    GIT_TAG main
+    GIT_SUBMODULES "third_party/json"
+    GIT_SHALLOW TRUE
+)
+set(CPPDAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(cppdap)
+
+set(ASDEBUGGER_SOURCES
+    src/asdebugger.cpp
+    src/as_debugger.cpp
+    src/as_debugger_dap.cpp
+    src/as_helpers.cpp
+    src/as_sc_debugger.cpp
+    src/as_sc_workspace.cpp
+    src/dllapi.cpp
+    src/engine_api.cpp
+    src/engine_hook.cpp
+    src/h_export.cpp
+    src/meta_api.cpp
+    src/server_hook.cpp
+)
+
 if(WIN32)
-    target_link_options(astemplate PRIVATE "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/src/astemplate.def")
+    list(APPEND ASDEBUGGER_SOURCES src/dllmain.cpp)
 endif()
-mmfg_assign_source_groups(astemplate)
+
+add_library(asdebugger SHARED ${ASDEBUGGER_SOURCES})
+mmfg_configure_target(asdebugger)
+target_compile_features(asdebugger PRIVATE cxx_std_20)
+target_link_libraries(asdebugger PRIVATE ASExt::SDK cppdap)
+target_compile_definitions(asdebugger PRIVATE ASDEBUGGER_VERSION="${PROJECT_VERSION}")
+
+if(WIN32)
+    target_link_libraries(asdebugger PRIVATE ws2_32)
+    target_link_options(asdebugger PRIVATE "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/src/asdebugger.def")
+else()
+    target_compile_options(asdebugger PRIVATE -fexceptions)
+    target_link_libraries(asdebugger PRIVATE pthread dl)
+endif()
+
+mmfg_assign_source_groups(asdebugger)
 install(FILES assets/plugins.ini.example DESTINATION addons/metamod)
-install(FILES examples/astemplate.as DESTINATION scripts/plugins)
+install(FILES examples/asdebugger_example.as DESTINATION scripts/plugins)
 install(FILES README.md LICENSE THIRD_PARTY.md DESTINATION .)
 install(FILES metamod/LICENSE DESTINATION licenses RENAME metamod-LICENSE)
 install(FILES asext/LICENSE DESTINATION licenses RENAME asext-LICENSE)
 
-option(ASTEMPLATE_BUILD_TESTS "Build the plugin ABI smoke test" ON)
-if(ASTEMPLATE_BUILD_TESTS)
+option(ASDEBUGGER_BUILD_TESTS "Build the plugin ABI smoke test" ON)
+if(ASDEBUGGER_BUILD_TESTS)
     enable_testing()
     add_executable(plugin-smoke tests/plugin_smoke.cpp)
     target_compile_features(plugin-smoke PRIVATE cxx_std_17)
@@ -44,6 +82,6 @@ if(ASTEMPLATE_BUILD_TESTS)
     if(NOT WIN32)
         target_compile_definitions(plugin-smoke PRIVATE PLATFORM_POSIX LINUX _LINUX)
     endif()
-    add_test(NAME plugin-smoke COMMAND plugin-smoke "$<TARGET_FILE:astemplate>")
+    add_test(NAME plugin-smoke COMMAND plugin-smoke "$<TARGET_FILE:asdebugger>")
 endif()
 include(cmake/FormatValidation.cmake)

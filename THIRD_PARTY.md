@@ -1,9 +1,8 @@
 # Third-party notices
 
-The template implementation is original MIT-licensed code using the plugin
-interfaces illustrated by [ascurl](https://github.com/metamod-fallguys/ascurl).
+The plugin implementation is original MIT-licensed code by Gaftherman.
 Dependencies retain their original source, copyright notices and licenses.
-The template license does not replace dependency or individual-file licenses.
+The plugin license does not replace dependency or individual-file licenses.
 
 - [Metamod](https://github.com/metamod-fallguys/metamod): see
   `metamod/LICENSE` and individual source/header notices. Legacy Metamod files
@@ -11,6 +10,10 @@ The template license does not replace dependency or individual-file licenses.
   engine linking exception. HLSDK files contain Valve/Id notices.
 - [ASExt](https://github.com/metamod-fallguys/asext): see `asext/LICENSE`
   (MIT, copyright hzqst) and individual legacy file notices.
+- [cppdap](https://github.com/google/cppdap): see `cppdap` source (Apache License 2.0,
+  copyright Google LLC). Provides the C++ Debug Adapter Protocol implementation.
+- [nlohmann/json](https://github.com/nlohmann/json): see `nlohmann/json` source (MIT License,
+  copyright Niels Lohmann). Transitive JSON serializer used by cppdap.
 - Transitive dependencies include the customized AngelScript SDK, Capstone,
   procmap, RapidJSON, Chocobo1Hash and FormatValidation. Their notices remain
   in the dependency source trees fetched by Git or CMake.

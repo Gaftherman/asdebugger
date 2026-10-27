@@ -38,7 +38,7 @@ def pe_exports(data, offset):
 def verify(prefix, platform):
     suffix = ".dll" if platform == "windows" else ".so"
     dlls = prefix / "addons/metamod/dlls"
-    for component in ("metamod", "asext", "astemplate"):
+    for component in ("metamod", "asext", "asdebugger"):
         library = dlls / (component + suffix)
         data = library.read_bytes()
         if platform == "windows":
@@ -61,14 +61,14 @@ def verify(prefix, platform):
         if component == "asext" and not {"ASEXT_RegisterDocInitCallback", "ASEXT_RegisterScriptBuilderDefineCallback",
                                         "ASEXT_UnregisterScriptBuilderDefineCallback", "ASEXT_RegisterGlobalFunction",
                                         "ASEXT_CScriptBuilder_DefineWord"} <= exports:
-            raise ValueError("ASExt is missing the template's required API exports")
+            raise ValueError("ASExt is missing the required API exports")
     gamedata = prefix / "addons/metamod/gamedata/asext"
     catalogs = list(gamedata.rglob("*.json"))
     if not catalogs:
         raise ValueError("ASExt gamedata is missing")
     for catalog in catalogs:
         json.loads(catalog.read_text(encoding="utf-8"))
-    for file in ("addons/metamod/plugins.ini.example", "scripts/plugins/astemplate.as", "README.md", "LICENSE", "THIRD_PARTY.md"):
+    for file in ("addons/metamod/plugins.ini.example", "scripts/plugins/asdebugger_example.as", "README.md", "LICENSE", "THIRD_PARTY.md"):
         if not (prefix / file).is_file():
             raise ValueError(f"Missing installed file: {file}")
 
@@ -103,19 +103,19 @@ def main():
     output = root / "build/packages"
     output.mkdir(parents=True, exist_ok=True)
     source = git(root, "rev-parse", "HEAD", check=False)
-    metadata = {"repository": os.environ.get("GITHUB_REPOSITORY", "metamod-fallguys/astemplate"),
+    metadata = {"repository": os.environ.get("GITHUB_REPOSITORY", "Gaftherman/asdebugger"),
                 "source_sha": source.stdout.strip() if source.returncode == 0 else None,
                 "uncommitted": bool(git(root, "status", "--porcelain").stdout.strip()),
                 "platform": args.platform, "configuration": args.config,
                 "components": {name: {"sha": git(root / name, "rev-parse", "HEAD").stdout.strip(),
                                       "url": git(root / name, "remote", "get-url", "origin").stdout.strip()}
                                for name in ("metamod", "asext")}}
-    with tempfile.TemporaryDirectory(prefix="astemplate-package-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="asdebugger-package-") as temporary:
         stage = Path(temporary)
         shutil.copytree(prefix, stage / "build")
         copy_notices(root, root / "build/x86" / args.config, stage / "build/licenses")
         (stage / "build/dependencies.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
-        name = f"astemplate-{args.platform}-x86-{args.config}"
+        name = f"asdebugger-{args.platform}-x86-{args.config}"
         if args.platform == "windows":
             archive = output / (name + ".zip")
             with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as stream:
@@ -130,7 +130,7 @@ def main():
             with tarfile.open(archive, "w:gz") as stream:
                 stream.add(stage / "build", arcname="build")
             with tarfile.open(archive) as stream:
-                if not stream.getmember("build/addons/metamod/dlls/astemplate.so").isfile():
+                if not stream.getmember("build/addons/metamod/dlls/asdebugger.so").isfile():
                     raise ValueError("Plugin missing from archive")
     print(f"Verified package: {archive}")
 

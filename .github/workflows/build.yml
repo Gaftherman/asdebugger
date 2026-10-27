@@ -92,7 +92,7 @@ jobs:
         run: python scripts/package.py --config '${{ matrix.config }}' --platform "$PACKAGE_PLATFORM"
       - uses: actions/upload-artifact@v4
         with:
-          name: astemplate-${{ runner.os }}-x86-${{ matrix.config }}
+          name: asdebugger-${{ runner.os }}-x86-${{ matrix.config }}
           path: build/packages/*
           if-no-files-found: error
           retention-days: 14

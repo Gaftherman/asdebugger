@@ -1,10 +1,32 @@
-# astemplate
+# asdebugger
 
-A minimal native AngelScript plugin for Sven Co-op using
-[metamod-fallguys](https://github.com/hzqst/metamod-fallguys).
-Use GitHub's **Use this template** button to start your own plugin repository.
-The pinned `metamod` and `asext` submodules are built from source alongside
-`astemplate`; installing the resulting package requires no separate DLL download.
+A native AngelScript DAP (Debug Adapter Protocol) debugger plugin for Sven Co-op using
+[metamod-fallguys](https://github.com/hzqst/metamod-fallguys) and
+[cppdap](https://github.com/google/cppdap).
+
+Developed by **Gaftherman** ([asdebugger](https://github.com/Gaftherman/asdebugger)).
+
+The plugin integrates directly with Sven Co-op's AngelScript VM via Metamod and `asext`,
+exposing a standards-compliant DAP TCP server (port 9002). This enables full source-level
+interactive debugging directly inside Visual Studio Code (breakpoints, call stack, local/global
+variables, compound object evaluation, stepping, and execution control) without crashes or server stalls.
+
+The pinned `metamod` and `asext` submodules are built from source alongside `asdebugger`;
+installing the resulting package requires no separate Metamod DLL download.
+
+## Features
+
+- **Debug Adapter Protocol (DAP)**: Standard TCP socket server on port `9002` compatible with VS Code.
+- **Source-Level Breakpoints**: Set breakpoints in any `.as` plugin file before or during runtime.
+- **Call Stack Navigation**: Complete stack trace inspection across AngelScript execution frames.
+- **Variable Inspection**:
+  - Primitive types (`int`, `float`, `bool`, `uint`, `double`, etc.).
+  - Strings (`string`).
+  - Compound objects and structs with member expansion (e.g., `Vector` with `x`, `y`, `z`).
+  - Scopes: *Locals*, *Parameters*, *Registers*, and *Globals* (including engine subsystems).
+- **Execution Flow Control**: Step over (`next`), Step in (`stepIn`), Step out (`stepOut`), Continue, and Pause.
+- **Non-blocking Server**: Safe thread suspension and resume using condition variables; dedicated server remains responsive.
+- **Native Macro & Helpers**: Injects preprocessor definition `METAMOD_PLUGIN_ASDEBUGGER` and native script function `DebugBreak()`.
 
 ## Build
 
@@ -18,9 +40,11 @@ sudo apt-get update
 sudo apt-get install -y cmake git python3 gcc-multilib g++-multilib
 ```
 
+Clone recursively to fetch the submodules:
+
 ```sh
-git clone --recursive https://github.com/metamod-fallguys/astemplate.git
-cd astemplate
+git clone --recursive https://github.com/Gaftherman/asdebugger.git
+cd asdebugger
 # Also needed after pulling a change to the submodules:
 git submodule update --init --recursive
 ```
@@ -45,121 +69,106 @@ cmake --install build/x86/Release
 python3 scripts/package.py --config Release --platform linux
 ```
 
-For Debug, replace every `Release` with `Debug`. Use a separate build tree for
-each configuration. Installation defaults to `install/x86/<Config>`; an explicit
-`CMAKE_INSTALL_PREFIX` or `cmake --install --prefix` overrides it. The packaging
-script uses the default prefix. Windows installs matching PDBs for all three DLLs.
-Only x86 is supported; Linux platform flags are set before compiler detection.
-
-Metamod resolves its transitive dependencies from recursive submodules or pinned
-FetchContent revisions, including the customized AngelScript headers. Existing
-clones can be selected with upstream `*_SOURCE_PATH` variables such as
-`ANGELSCRIPT_SOURCE_PATH` and `FORMAT_VALIDATION_SOURCE_PATH`. Metamod and ASExt
-themselves always build from this repository's submodules.
-
-ASExt's gamedata is downloaded, pruned, validated and installed by its upstream
-build target. `MMFG_SYNC_GAMEDATA=OFF` is suitable only when the build tree already
-contains a compatible catalog; the package verifier rejects missing gamedata.
+For Debug, replace every `Release` with `Debug`. Use a separate build tree for each
+configuration. Installation defaults to `install/x86/<Config>`; an explicit
+`CMAKE_INSTALL_PREFIX` overrides it. The packaging script creates clean archives
+in `build/packages/`.
 
 ## Install and run
 
-1. Stop the Sven Co-op server. Extract a release archive and merge its
-   `build/addons/` directory into the server's `svencoop/addons/` directory.
-   For a local build, copy `install/x86/Release/addons/` instead.
+1. Stop the Sven Co-op server. Extract a release archive (`asdebugger-windows-x86-Release.zip`
+   or `asdebugger-linux-x86-Release.tar.gz`) and merge its `build/addons/` directory into the
+   server's `svencoop/addons/` directory. For a local build, copy `install/x86/Release/addons/`.
 2. Configure `svencoop/liblist.gam` to load Metamod for your platform:
-   `gamedll "addons/metamod/dlls/metamod.dll"` on Windows or
-   `gamedll_linux "addons/metamod/dlls/metamod.so"` on Linux.
+   - Windows: `gamedll "addons/metamod/dlls/metamod.dll"`
+   - Linux: `gamedll_linux "addons/metamod/dlls/metamod.so"`
 3. Merge the appropriate lines from `addons/metamod/plugins.ini.example` into
-   your existing `addons/metamod/plugins.ini`. Load asext before astemplate.
-   Preserve your existing plugin entries and server configuration.
-4. Copy the package's `build/scripts/plugins/astemplate.as` (or the local install's
-   `scripts/plugins/astemplate.as`) to `svencoop/scripts/plugins/astemplate.as`.
-   Add this block to the existing `svencoop/default_plugins.txt`:
-
+   your existing `addons/metamod/plugins.ini`. Load `asext` before `asdebugger`:
+   ```ini
+   win32 addons/metamod/dlls/asext.dll
+   win32 addons/metamod/dlls/asdebugger.dll
+   ```
+   (On Linux, replace `.dll` with `.so`).
+4. Copy the sample script `examples/asdebugger_example.as` to `svencoop/scripts/plugins/asdebugger_example.as`
+   and add it to `svencoop/default_plugins.txt`:
    ```text
    "plugin"
    {
-       "name" "ASTemplate example"
-       "script" "astemplate"
+       "name" "ASDebugger Example"
+       "script" "asdebugger_example"
    }
    ```
+5. Start the server. Run `meta list` in the server console to confirm `asext` and `asdebugger`
+   are loaded and `RUNNING`. The server will output:
+   ```text
+   [ASDEBUG] Metamod AngelScript DAP Debugger initialized.
+   [ASDEBUG] DAP listening on 0.0.0.0:9002
+   ```
 
-5. Start the server. `meta list` should show asext and astemplate running.
-   The example prints `ASTemplate API version: 1` in the server console.
+## Debugging with Visual Studio Code
 
-The native plugin registers the global AngelScript function
-`int ASTemplateVersion()` through ASExt's documentation initialization callback,
-using `asCALL_CDECL`, and defines `METAMOD_PLUGIN_ASTEMPLATE` for script builds.
-It must load once at server startup, before AngelScript initializes. Restart the
-server to replace it: ASExt retains documentation callbacks and native function
-addresses, so runtime unload/reload is deliberately disabled.
+### 1. Launch Configuration (`.vscode/launch.json`)
 
-The ABI smoke test loads the actual native library with mock Metamod/ASExt APIs.
-It checks registration, the returned version, exported entrypoints and failure
-paths. It does not replace a test on a real Sven Co-op server. Missing asext,
-missing exports and rejected initialization callbacks produce errors in the
-Metamod log. Missing private game symbols require a supported server build and
-matching ASExt gamedata.
+Create `.vscode/launch.json` in your workspace or game scripts folder:
 
-## Customize
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Attach to Sven Co-op DAP Server",
+      "type": "asdebugger",
+      "request": "attach",
+      "server": "127.0.0.1",
+      "port": 9002,
+      "stopOnEntry": false,
+      "trace": true
+    }
+  ]
+}
+```
 
-Rename the CMake project/target, plugin metadata and paths in `src/plugin.cpp`,
-the sample API/macro and script, loading configuration, and package/artifact names
-in `scripts/package.py` and the workflows. Update URLs, authors and this README.
-Add your native functions alongside `ASTemplateVersion()` and register them in
-`RegisterDocumentation()`. Keep public dependency includes under their SDK targets;
-avoid depending on `metamod/src` or `asext/src` internals.
+### 2. Debugging Workflow
+
+1. Open your AngelScript scripts folder in VS Code.
+2. Set a breakpoint on any line of code (press <kbd>F9</kbd>).
+3. Press <kbd>F5</kbd> to attach to the server.
+4. When the game engine executes that line of script:
+   - Execution pauses automatically.
+   - VS Code highlights the active statement.
+   - The **Variables pane** displays all *Locals*, *Parameters*, *Registers*, and *Globals*.
+   - Expand objects (e.g. `Vector`) to view inner variables (`x`, `y`, `z`).
+   - Use <kbd>F10</kbd> (Step Over), <kbd>F11</kbd> (Step Into), or <kbd>F5</kbd> (Continue).
+
+## Native Plugin & Macro Support
+
+The plugin defines the preprocessor macro `METAMOD_PLUGIN_ASDEBUGGER`:
+
+```angelscript
+#if METAMOD_PLUGIN_ASDEBUGGER
+    // Code executed only when the debugger plugin is active
+#endif
+```
+
+It also provides a native breakpoint function callable from AngelScript:
+
+```angelscript
+DebugBreak();
+```
 
 ## CI and releases
 
 - Branch pushes and pull requests build Windows and Linux x86 Debug/Release,
-  run tests and formatting checks, then upload complete packages as artifacts.
-- Pushing any new tag builds both platforms in Release and publishes a GitHub
-  Release. For example, `git tag v0.1.0` followed by `git push origin v0.1.0`.
-  Rerun a failed release workflow to retry uploading its packages.
-- Packages retain the `build/addons/` layout and include example scripts,
-  licenses, documentation and `build/dependencies.json` with exact Git revisions.
-  Initial repository setup does not create a release tag.
-
-`build.yml` is reusable: `ref` selects an immutable source revision,
-`asext_sha`/`metamod_sha` together select candidate dependency commits, and
-`release_only` limits the configuration matrix to Release. Normal builds use the
-committed gitlinks. These workflows operate on the current repository, including
-repositories generated from this template.
+  run smoke tests and formatting checks, and package complete release artifacts.
+- Pushing any new tag (e.g., `git tag v1.0.0 && git push origin v1.0.0`) triggers
+  the release workflow and publishes a GitHub Release with prebuilt binaries.
+- Packages retain the `build/addons/` layout with `dependencies.json` recording
+  exact Git submodule revisions.
 
 ## Upstream updates
 
-`update-upstream.yml` runs daily at 02:17 UTC and can be started manually.
-To enable writes, create the repository secret **UPSTREAM_UPDATE_TOKEN** using a
-fine-grained personal access token restricted to your template-derived repository
-with **Contents: read and write**. Your organization may require approval for
-the token. Branch/tag rules must permit the token owner to push updates; the
-workflow never bypasses protection or force-pushes. The token is used only by the
-publication job, after validation; it is not passed to candidate builds.
-
-The updater finds ASExt's latest published non-draft, non-prerelease release,
-resolves its actual tag to a commit (including annotated tags), and selects the
-current Metamod `main` commit. It builds that exact combination on both platforms
-before committing the submodule changes and atomically pushing the default branch
-and `asext-release-<release-id>` tag. The tag triggers the ordinary release workflow.
-A PAT is used because pushes using `GITHUB_TOKEN` do not trigger downstream push
-workflows. No release, an already handled release, or a missing secret is a normal
-no-op. API/build errors fail the run without pushing. If the default branch moves
-during validation, the update is deferred until the next check. The GitHub job
-concurrency group serializes scheduled/manual updates.
-
-To disable automatic writes, remove the secret. To update dependencies manually:
-
-```sh
-git -C asext fetch origin main
-git -C asext checkout --detach origin/main
-git -C metamod fetch origin main
-git -C metamod checkout --detach origin/main
-git submodule update --init --recursive
-# Build and test both platforms before committing:
-git add asext metamod
-git commit -m "chore(deps): update metamod and asext"
-```
+`update-upstream.yml` checks daily for updates to upstream `metamod` and `asext`
+releases and performs automated validation before publishing.
 
 ## Development checks
 
@@ -168,10 +177,9 @@ python -m unittest discover -s tests -p "test_*.py" -v
 python -m pip install clang-format==23.1.3
 cmake -S . -B build/format -DFORMAT_VALIDATION_ONLY=ON
 cmake --build build/format --target format-check
-# Apply formatting when needed:
-cmake --build build/format --target format
 ```
 
-Formatting uses the shared pinned FormatValidation tooling. Dependencies and
-HLSDK are excluded from the template's formatting target. See [THIRD_PARTY.md](THIRD_PARTY.md)
-for preserved dependency and SDK notices.
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+See [THIRD_PARTY.md](THIRD_PARTY.md) for preserved dependency notices (Metamod, ASExt, cppdap, HLSDK).

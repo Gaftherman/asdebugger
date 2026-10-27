@@ -130,8 +130,8 @@ def main():
     if args.command == "checkout":
         checkout_dependencies(root, args.asext_sha, args.metamod_sha)
         return
-    repository = os.environ["GITHUB_REPOSITORY"]
-    branch = os.environ["DEFAULT_BRANCH"]
+    repository = os.environ.get("GITHUB_REPOSITORY", "Gaftherman/asdebugger")
+    branch = os.environ.get("DEFAULT_BRANCH", "main")
     if args.command == "publish":
         result = publish(root, json.loads(args.candidate.read_text()), repository, branch, args.validated)
         print("Update result:", result)
