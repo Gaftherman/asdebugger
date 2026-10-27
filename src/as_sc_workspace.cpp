@@ -19,7 +19,6 @@ asSCWorkspace::asSCWorkspace(std::string_view basePath, std::initializer_list<as
     }
 
     CompileScriptSources();
-    CompileBreakpointPositions();
 }
 
 std::string asSCWorkspace::PathToSection(const std::string_view v) const

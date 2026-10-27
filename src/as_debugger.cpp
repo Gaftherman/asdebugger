@@ -1217,13 +1217,6 @@ void asIDBFileWorkspace::CompileBreakpointPositions()
     int         col;
     int         row = ctx->GetLineNumber(0, &col, &section);
 
-    static int s_lcCount = 0;
-    if (++s_lcCount % 100 == 1)
-    {
-        ASDebug_Log("LineCallback #%d: sec='%s', row=%d, bp_count=%zu",
-                    s_lcCount, section ? section : "null", row, debugger->breakpoints.size());
-    }
-
     // we might not have an action - functions called from within
     // the debugger will never have this set.
     if (debugger->action != asIDBAction::None)
@@ -1302,42 +1295,51 @@ void asIDBFileWorkspace::CompileBreakpointPositions()
     // line.
     bool break_from_bp = false;
 
-    if (section)
+    if (section && (!debugger->breakpoints.empty() || !debugger->function_breakpoints.empty()))
     {
         std::scoped_lock lock(debugger->mutex);
 
-        auto entries = debugger->breakpoints.find(section);
-        if (entries == debugger->breakpoints.end() && debugger->workspace)
+        std::string secStr(section);
+        // Fast-path: Check negative cache to skip sections without breakpoints
+        if (debugger->bp_negative_cache.find(secStr) == debugger->bp_negative_cache.end())
         {
-            std::string resolved = debugger->workspace->PathToSection(section);
-            entries              = debugger->breakpoints.find(resolved);
-        }
-        if (entries == debugger->breakpoints.end())
-        {
-            for (auto it = debugger->breakpoints.begin(); it != debugger->breakpoints.end(); ++it)
+            auto entries = debugger->breakpoints.find(section);
+            if (entries == debugger->breakpoints.end() && debugger->workspace)
             {
-                if (PathMatchesSection(section, it->first))
-                {
-                    entries = it;
-                    break;
-                }
+                std::string resolved = debugger->workspace->PathToSection(section);
+                entries              = debugger->breakpoints.find(resolved);
             }
-        }
-
-        if (entries != debugger->breakpoints.end())
-        {
-            ASDebug_Log("BP entry found for '%.*s'! checking row %d vs %zu registered bps",
-                        (int)entries->first.length(), entries->first.data(), row, entries->second.size());
-            for (auto& lines : entries->second)
+            if (entries == debugger->breakpoints.end())
             {
-                if (row == lines.line)
+                for (auto it = debugger->breakpoints.begin(); it != debugger->breakpoints.end(); ++it)
                 {
-                    if (!lines.column.has_value() || lines.column.value() <= 0 || lines.column.value() == col)
+                    if (PathMatchesSection(section, it->first))
                     {
-                        break_from_bp = true;
+                        entries = it;
                         break;
                     }
                 }
+            }
+
+            if (entries != debugger->breakpoints.end())
+            {
+                debugger->bp_section_cache.insert(secStr);
+                for (auto& lines : entries->second)
+                {
+                    if (row == lines.line)
+                    {
+                        if (!lines.column.has_value() || lines.column.value() <= 0 || lines.column.value() == col)
+                        {
+                            break_from_bp = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // Remember that this section has no breakpoints so future lines skip all checks
+                debugger->bp_negative_cache.insert(secStr);
             }
         }
 
@@ -1421,10 +1423,21 @@ void asIDBDebugger::DebugBreak(asIScriptContext* ctx)
     Suspend();
 }
 
+void asIDBDebugger::ClearBreakpointCaches()
+{
+    bp_section_cache.clear();
+    bp_negative_cache.clear();
+    for (const auto& [sec, _] : breakpoints)
+    {
+        bp_section_cache.insert(std::string(sec));
+    }
+}
+
 void asIDBDebugger::UpdateHasWorkAtomic()
 {
     std::scoped_lock lock(mutex);
-    bool             work = (action != asIDBAction::None) || (!breakpoints.empty()) || (!function_breakpoints.empty());
+    ClearBreakpointCaches();
+    bool work = (action != asIDBAction::None) || (!breakpoints.empty()) || (!function_breakpoints.empty());
     has_work_atomic.store(work, std::memory_order_release);
 }
 

@@ -527,6 +527,7 @@ public:
 
     // compile / refresh script sources from registered engines
     virtual void CompileScriptSources() {}
+    virtual void CompileBreakpointPositions() {}
 };
 
 // A basic workspace that expects the sources go into
@@ -600,6 +601,11 @@ public:
     asIDBWorkspace*                 workspace;
     asIDBBreakpointMap              breakpoints;
     asIDBSectionFunctionBreakpoints function_breakpoints;
+
+    // Fast lookup caches for LineCallback to avoid any work on sections without breakpoints
+    std::unordered_set<std::string> bp_section_cache;
+    std::unordered_set<std::string> bp_negative_cache;
+    void                            ClearBreakpointCaches();
 
     // cache for the current active broken state.
     // the cache is only kept for the duration of

@@ -27,13 +27,13 @@ static META_FUNCTIONS gMetaFunctionTable = {
 plugin_info_t Plugin_info = {
     "5:14",                                     // ifvers
     "AngelScriptDebugger",                      // name
-    "1.3.2",                                    // version
+    "1.3.3",                                    // version
     "2026",                                     // date
     "Gaftherman",                               // author
     "https://github.com/Gaftherman/asdebugger", // url
     "ASDEBUG",                                  // logtag, all caps please
     PT_ANYTIME,                                 // (when) loadable
-    PT_NEVER,                                   // (when) unloadable
+    PT_ANYTIME,                                 // (when) unloadable
 };
 
 // Global vars from metamod:

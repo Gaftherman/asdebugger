@@ -169,7 +169,6 @@ void ASDebugger_ServerActivate(const char* gameDir)
     else if (g_Workspace)
     {
         g_Workspace->CompileScriptSources();
-        g_Workspace->CompileBreakpointPositions();
     }
 }
 

@@ -172,7 +172,7 @@ public:
         {
             auto& src = response.sources.emplace_back();
             src.name  = source.section;
-            if (dbg->workspace->SectionIsVirtual(source.section))
+            if (source.section.rfind("__", 0) == 0)
             {
                 src.sourceReference = source.ref;
             }
@@ -225,6 +225,9 @@ public:
         if (request.source.name.has_value())
         {
             std::scoped_lock lock(dbg->mutex);
+            if (dbg->workspace && dbg->workspace->potential_breakpoints.empty())
+                dbg->workspace->CompileBreakpointPositions();
+
             if (auto linecols = dbg->workspace->potential_breakpoints.find(request.source.name.value());
                 linecols != dbg->workspace->potential_breakpoints.end())
             {
