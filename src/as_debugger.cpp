@@ -1314,38 +1314,9 @@ void asIDBFileWorkspace::CompileBreakpointPositions()
         }
         if (entries == debugger->breakpoints.end())
         {
-            std::string secStr(section);
-            std::replace(secStr.begin(), secStr.end(), '\\', '/');
-
             for (auto it = debugger->breakpoints.begin(); it != debugger->breakpoints.end(); ++it)
             {
-                if (it->first.empty())
-                    continue;
-
-                std::string bpPath(it->first);
-                std::replace(bpPath.begin(), bpPath.end(), '\\', '/');
-
-                bool match = false;
-                if (secStr == bpPath)
-                {
-                    match = true;
-                }
-                else if (secStr.length() > bpPath.length() &&
-                         secStr.compare(secStr.length() - bpPath.length(), bpPath.length(), bpPath) == 0)
-                {
-                    char prevChar = secStr[secStr.length() - bpPath.length() - 1];
-                    if (prevChar == '/' || prevChar == '\\')
-                        match = true;
-                }
-                else if (bpPath.length() > secStr.length() &&
-                         bpPath.compare(bpPath.length() - secStr.length(), secStr.length(), secStr) == 0)
-                {
-                    char prevChar = bpPath[bpPath.length() - secStr.length() - 1];
-                    if (prevChar == '/' || prevChar == '\\')
-                        match = true;
-                }
-
-                if (match)
+                if (PathMatchesSection(section, it->first))
                 {
                     entries = it;
                     break;

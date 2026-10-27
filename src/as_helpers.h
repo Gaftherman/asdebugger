@@ -3,6 +3,71 @@
 
 #pragma once
 
+#include <cctype>
+#include <string>
+#include <string_view>
+
+inline bool PathEqualsCaseInsensitive(std::string_view a, std::string_view b)
+{
+    if (a.length() != b.length())
+        return false;
+    for (size_t i = 0; i < a.length(); ++i)
+    {
+        char ca = (a[i] == '\\') ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(a[i])));
+        char cb = (b[i] == '\\') ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(b[i])));
+        if (ca != cb)
+            return false;
+    }
+    return true;
+}
+
+inline bool PathEndsWithCaseInsensitive(std::string_view full, std::string_view suffix)
+{
+    if (full.length() < suffix.length())
+        return false;
+    size_t offset = full.length() - suffix.length();
+    for (size_t i = 0; i < suffix.length(); ++i)
+    {
+        char ca = (full[offset + i] == '\\') ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(full[offset + i])));
+        char cb = (suffix[i] == '\\') ? '/' : static_cast<char>(std::tolower(static_cast<unsigned char>(suffix[i])));
+        if (ca != cb)
+            return false;
+    }
+    return true;
+}
+
+inline bool PathMatchesSection(std::string_view pathA, std::string_view pathB)
+{
+    if (pathA.empty() || pathB.empty())
+        return false;
+
+    if (PathEqualsCaseInsensitive(pathA, pathB))
+        return true;
+
+    if (pathA.length() > pathB.length())
+    {
+        size_t offset = pathA.length() - pathB.length();
+        if (PathEndsWithCaseInsensitive(pathA, pathB))
+        {
+            char prevChar = pathA[offset - 1];
+            if (prevChar == '/' || prevChar == '\\')
+                return true;
+        }
+    }
+    else if (pathB.length() > pathA.length())
+    {
+        size_t offset = pathB.length() - pathA.length();
+        if (PathEndsWithCaseInsensitive(pathB, pathA))
+        {
+            char prevChar = pathB[offset - 1];
+            if (prevChar == '/' || prevChar == '\\')
+                return true;
+        }
+    }
+
+    return false;
+}
+
 #include <angelscript.h>
 #include <string_view>
 #include <variant>

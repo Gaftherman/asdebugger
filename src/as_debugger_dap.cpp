@@ -723,6 +723,8 @@ void asIDBDAPServer::StartServer()
     {
         ASDebug_Log("NOTICE: Default DAP port %d is already in use. Automatically switched to fallback port %d.",
                     port, actual_port);
+        ASDebug_Log("NOTICE: To attach from VS Code, set \"port\": %d in your launch.json, or close the application occupying port %d.",
+                    actual_port, port);
     }
 
     server       = dap::net::Server::create();

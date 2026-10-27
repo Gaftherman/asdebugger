@@ -30,46 +30,34 @@ std::string asSCWorkspace::PathToSection(const std::string_view v) const
     if (pathStr.empty())
         return {};
 
-    // 1. Exact match with an existing section (e.g. absolute engine path)
-    if (sections.find(pathStr) != sections.end())
-        return pathStr;
+    // 1. Exact match with an existing section (case-insensitive)
+    for (const auto& sec : sections)
+    {
+        if (PathEqualsCaseInsensitive(sec.section, pathStr))
+            return std::string(sec.section);
+    }
 
     // 2. Try relative / suffix match against existing sections on directory boundary
     for (const auto& sec : sections)
     {
-        if (sec.section == pathStr)
+        if (PathMatchesSection(sec.section, pathStr))
             return std::string(sec.section);
-
-        if (sec.section.length() > pathStr.length())
-        {
-            size_t offset = sec.section.length() - pathStr.length();
-            if (sec.section.compare(offset, pathStr.length(), pathStr) == 0)
-            {
-                char c = sec.section[offset - 1];
-                if (c == '/' || c == '\\')
-                    return std::string(sec.section);
-            }
-        }
-        else if (pathStr.length() > sec.section.length())
-        {
-            size_t offset = pathStr.length() - sec.section.length();
-            if (pathStr.compare(offset, sec.section.length(), sec.section) == 0)
-            {
-                char c = pathStr[offset - 1];
-                if (c == '/' || c == '\\')
-                    return std::string(sec.section);
-            }
-        }
     }
 
     // 3. Fallback: try stripping or adding base_path / scripts
     std::string withBase = base_path + "/" + pathStr;
-    if (sections.find(withBase) != sections.end())
-        return withBase;
+    for (const auto& sec : sections)
+    {
+        if (PathEqualsCaseInsensitive(sec.section, withBase) || PathMatchesSection(sec.section, withBase))
+            return std::string(sec.section);
+    }
 
     std::string withScripts = "scripts/" + pathStr;
-    if (sections.find(withScripts) != sections.end())
-        return withScripts;
+    for (const auto& sec : sections)
+    {
+        if (PathEqualsCaseInsensitive(sec.section, withScripts) || PathMatchesSection(sec.section, withScripts))
+            return std::string(sec.section);
+    }
 
     return pathStr;
 }

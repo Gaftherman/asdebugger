@@ -216,8 +216,16 @@ void ASDebugger_Init(const char* gameDir)
     g_DAPServer->StartServer();
     if (g_DAPServer->IsRunning())
     {
-        LOG_MESSAGE(PLID, "AngelScript DAP Server started on port %d (base path: '%s')",
-                    g_DAPServer->GetBoundPort(), basePath.c_str());
+        if (g_DAPServer->GetBoundPort() != g_DebuggerPort)
+        {
+            LOG_MESSAGE(PLID, "WARNING: Default DAP port %d is in use! Switched to fallback port %d. Set \"port\": %d in VS Code launch.json to attach.",
+                        g_DebuggerPort, g_DAPServer->GetBoundPort(), g_DAPServer->GetBoundPort());
+        }
+        else
+        {
+            LOG_MESSAGE(PLID, "AngelScript DAP Server started on port %d (base path: '%s')",
+                        g_DAPServer->GetBoundPort(), basePath.c_str());
+        }
     }
     else
     {
