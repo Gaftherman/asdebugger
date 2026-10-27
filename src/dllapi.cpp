@@ -22,7 +22,7 @@ void ServerActivate(edict_t* pEdictList, int edictCount, int clientMax)
     const char* gameDir = nullptr;
     if (gpMetaUtilFuncs)
         gameDir = GET_GAME_INFO(PLID, GINFO_GAMEDIR);
-    ASDebugger_Init(gameDir);
+    ASDebugger_ServerActivate(gameDir);
     SET_META_RESULT(MRES_IGNORED);
 }
 

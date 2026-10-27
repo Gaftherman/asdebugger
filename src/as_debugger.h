@@ -16,6 +16,8 @@
 
 #include "as_helpers.h"
 
+void ASDebug_Log(const char* fmt, ...);
+
 struct asIDBTypeId
 {
     int              typeId    = 0;
@@ -74,7 +76,10 @@ struct asIDBVarAddr
         {
             if (reference)
                 return reinterpret_cast<T*>(address);
-            return *reinterpret_cast<T**>(address);
+            T** ptr = reinterpret_cast<T**>(address);
+            if (!ptr)
+                return nullptr;
+            return *ptr;
         }
         return reinterpret_cast<T*>(address);
     }
@@ -519,6 +524,9 @@ public:
 
     // return the full section source of the given section.
     virtual std::string SectionSource(const std::string_view v) const = 0;
+
+    // compile / refresh script sources from registered engines
+    virtual void CompileScriptSources() {}
 };
 
 // A basic workspace that expects the sources go into
@@ -580,6 +588,7 @@ public:
     // in one module from accidentally catching execution in another module's context
     asIScriptContext* stepping_context     = nullptr;
     int               stepping_function_id = -1;
+    asIDBAction       last_break_action    = asIDBAction::None;
 
     // Filter exceptions: only pause if explicitly requested by DAP client
     bool break_on_exceptions = false;

@@ -32,6 +32,21 @@ typedef int (*fnExecute)(asIScriptContext* pThis);
 static fnExecute g_pfnOriginalExecute = nullptr;
 static void**    g_pContextVtable     = nullptr;
 
+void ASDebug_Log(const char* fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+    char buf[1024];
+    vsnprintf(buf, sizeof(buf), fmt, va);
+    va_end(va);
+    if (gpMetaUtilFuncs && gpMetaUtilFuncs->pfnLogMessage)
+    {
+        LOG_MESSAGE(PLID, "%s", buf);
+    }
+    printf("[ASDEBUG] %s\n", buf);
+    fflush(stdout);
+}
+
 static int s_ExecuteCount = 0;
 #ifdef _WIN32
 static int __fastcall Hooked_Execute(asIScriptContext* pThis, void* /*dummy*/)
@@ -47,10 +62,27 @@ static int Hooked_Execute(asIScriptContext* pThis)
 
     if (g_Debugger && g_Debugger->HasWork())
     {
+        asIScriptFunction* fn = pThis->GetFunction(0);
+        ASDebug_Log("Hooked_Execute HAS WORK: ctx=%p, func=%s, state=%d",
+                    pThis, fn ? fn->GetName() : "null", (int)pThis->GetState());
         g_Debugger->HookContext(pThis, true);
     }
 
-    return g_pfnOriginalExecute(pThis);
+    int ret = g_pfnOriginalExecute(pThis);
+
+    if (g_Debugger)
+    {
+        std::scoped_lock lock(g_Debugger->mutex);
+        if (pThis == g_Debugger->stepping_context &&
+            (pThis->GetState() == asEXECUTION_FINISHED || pThis->GetState() == asEXECUTION_UNINITIALIZED))
+        {
+            g_Debugger->action               = asIDBAction::None;
+            g_Debugger->stepping_context     = nullptr;
+            g_Debugger->stepping_function_id = -1;
+        }
+    }
+
+    return ret;
 }
 
 static void HookContextVtable(asIScriptEngine* engine)
@@ -126,6 +158,19 @@ static void UnhookContextVtable()
 #endif
         g_pfnOriginalExecute = nullptr;
         g_pContextVtable     = nullptr;
+    }
+}
+
+void ASDebugger_ServerActivate(const char* gameDir)
+{
+    if (!g_Debugger)
+    {
+        ASDebugger_Init(gameDir);
+    }
+    else if (g_Workspace)
+    {
+        g_Workspace->CompileScriptSources();
+        g_Workspace->CompileBreakpointPositions();
     }
 }
 

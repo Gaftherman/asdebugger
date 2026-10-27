@@ -25,9 +25,9 @@ static META_FUNCTIONS gMetaFunctionTable = {
 
 // Description of plugin
 plugin_info_t Plugin_info = {
-    META_INTERFACE_VERSION,                     // ifvers
+    "5:14",                                     // ifvers
     "AngelScriptDebugger",                      // name
-    "1.2.0",                                    // version
+    "1.3.0",                                    // version
     "2026",                                     // date
     "Gaftherman",                               // author
     "https://github.com/Gaftherman/asdebugger", // url

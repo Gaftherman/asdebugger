@@ -27,48 +27,49 @@ std::string asSCWorkspace::PathToSection(const std::string_view v) const
     std::string pathStr(v);
     std::replace(pathStr.begin(), pathStr.end(), '\\', '/');
 
+    if (pathStr.empty())
+        return {};
+
     // 1. Exact match with an existing section (e.g. absolute engine path)
     if (sections.find(pathStr) != sections.end())
         return pathStr;
 
-    // 2. Try relative path computation
-    std::error_code       ec;
-    std::filesystem::path fullPath(pathStr);
-    std::filesystem::path base(base_path);
+    // 2. Try relative / suffix match against existing sections on directory boundary
+    for (const auto& sec : sections)
+    {
+        if (sec.section == pathStr)
+            return std::string(sec.section);
 
-    std::filesystem::path rel    = std::filesystem::relative(fullPath, base, ec);
-    std::string           relStr = ec ? pathStr : rel.generic_string();
+        if (sec.section.length() > pathStr.length())
+        {
+            size_t offset = sec.section.length() - pathStr.length();
+            if (sec.section.compare(offset, pathStr.length(), pathStr) == 0)
+            {
+                char c = sec.section[offset - 1];
+                if (c == '/' || c == '\\')
+                    return std::string(sec.section);
+            }
+        }
+        else if (pathStr.length() > sec.section.length())
+        {
+            size_t offset = pathStr.length() - sec.section.length();
+            if (pathStr.compare(offset, sec.section.length(), sec.section) == 0)
+            {
+                char c = pathStr[offset - 1];
+                if (c == '/' || c == '\\')
+                    return std::string(sec.section);
+            }
+        }
+    }
 
-    if (sections.find(relStr) != sections.end())
-        return relStr;
-
-    // 3. Try with "scripts/" prefix
-    std::string withScripts = "scripts/" + relStr;
-    if (sections.find(withScripts) != sections.end())
-        return withScripts;
-
-    // 4. Try with base_path prefix
-    std::string withBase = base_path + "/" + relStr;
+    // 3. Fallback: try stripping or adding base_path / scripts
+    std::string withBase = base_path + "/" + pathStr;
     if (sections.find(withBase) != sections.end())
         return withBase;
 
-    // 5. Try stripped "scripts/" prefix
-    if (relStr.rfind("scripts/", 0) == 0)
-    {
-        std::string stripped = relStr.substr(8);
-        if (sections.find(stripped) != sections.end())
-            return stripped;
-    }
-
-    // 6. Match by suffix (e.g. if a section ends with relStr)
-    for (const auto& sec : sections)
-    {
-        if (sec.section.length() >= relStr.length() &&
-            sec.section.compare(sec.section.length() - relStr.length(), relStr.length(), relStr) == 0)
-        {
-            return std::string(sec.section);
-        }
-    }
+    std::string withScripts = "scripts/" + pathStr;
+    if (sections.find(withScripts) != sections.end())
+        return withScripts;
 
     return pathStr;
 }

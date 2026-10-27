@@ -168,11 +168,11 @@ void asIDBValue::SetArgument(asIScriptContext* ctx, asUINT index) const
 asIDBObjectIteratorHelper::asIDBObjectIteratorHelper(asITypeInfo* type, void* obj) :
     type(type),
     obj(obj),
-    opForBegin(type->GetMethodByName("opForBegin")),
-    opForEnd(type->GetMethodByName("opForEnd")),
-    opForNext(type->GetMethodByName("opForNext"))
+    opForBegin(type ? type->GetMethodByName("opForBegin") : nullptr),
+    opForEnd(type ? type->GetMethodByName("opForEnd") : nullptr),
+    opForNext(type ? type->GetMethodByName("opForNext") : nullptr)
 {
-    if (!Validate())
+    if (!type || !obj || !Validate())
     {
         opForBegin = nullptr;
         return;

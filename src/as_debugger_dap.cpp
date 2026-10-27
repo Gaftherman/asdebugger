@@ -15,6 +15,14 @@ public:
     std::atomic_bool              terminate              = false;
     std::unique_ptr<dap::Session> session;
 
+    ~asIDBDAPClient()
+    {
+        if (dbg)
+        {
+            dbg->SetAction(asIDBAction::Continue);
+        }
+    }
+
     asIDBDAPClient(asIDBDebugger* dbg, const std::shared_ptr<dap::ReaderWriter>& socket) :
         dbg(dbg),
         session(dap::Session::create())
@@ -141,6 +149,9 @@ public:
     {
         dap::LoadedSourcesResponse response{};
 
+        if (dbg->workspace)
+            dbg->workspace->CompileScriptSources();
+
         for (auto& source : dbg->workspace->sections)
         {
             auto& src = response.sources.emplace_back();
@@ -229,6 +240,10 @@ public:
     dap::DisconnectResponse HandleRequest(const dap::DisconnectRequest& request)
     {
         terminate = true;
+        if (dbg)
+        {
+            dbg->SetAction(asIDBAction::Continue);
+        }
         return dap::DisconnectResponse{};
     }
 

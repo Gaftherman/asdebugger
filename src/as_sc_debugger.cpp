@@ -48,7 +48,7 @@ void asSCDebugger::Suspend()
         }
         else
         {
-            switch (action)
+            switch (last_break_action)
             {
                 case asIDBAction::Pause:
                     event.reason = "pause";

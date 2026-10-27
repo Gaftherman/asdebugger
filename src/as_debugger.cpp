@@ -773,11 +773,20 @@ public:
     auto  ctx   = cache.ctx;
     auto  type  = ctx->GetEngine()->GetTypeInfoById(var->address.typeId);
 
+    if (!type)
+    {
+        if (var->value.empty())
+            var->value = fmt::format("{{{}}}", var->typeName);
+        var->expandable = false;
+        return;
+    }
+
     var->expandable = CanExpand(var);
 
-    if (ctx->GetState() != asEXECUTION_EXCEPTION)
+    void* objPtr = var->address.ResolveAs<void>();
+    if (ctx->GetState() != asEXECUTION_EXCEPTION && objPtr != nullptr)
     {
-        asIDBObjectIteratorHelper it(type, var->address.ResolveAs<void>());
+        asIDBObjectIteratorHelper it(type, objPtr);
 
         if (!it)
         {
@@ -821,6 +830,9 @@ void asIDBObjectTypeEvaluator::QueryVariableProperties(asIDBVariable::Ptr var) c
     auto& dbg   = var->dbg;
     auto& cache = *dbg.cache;
     auto  type  = cache.ctx->GetEngine()->GetTypeInfoById(var->address.typeId);
+
+    if (!type || var->address.ResolveAs<void>() == nullptr)
+        return;
 
     for (asUINT n = 0; n < type->GetPropertyCount(); n++)
     {
@@ -868,6 +880,9 @@ void asIDBObjectTypeEvaluator::QueryVariableGetters(asIDBVariable::Ptr var) cons
     auto& cache = *dbg.cache;
     auto  type  = cache.ctx->GetEngine()->GetTypeInfoById(var->address.typeId);
 
+    if (!type || var->address.ResolveAs<void>() == nullptr)
+        return;
+
     for (asUINT n = 0; n < type->GetMethodCount(); n++)
     {
         asIScriptFunction* function = type->GetMethodByIndex(n, true);
@@ -887,6 +902,9 @@ bool asIDBObjectTypeEvaluator::CanExpand(asIDBVariable::Ptr var) const
     auto& dbg   = var->dbg;
     auto& cache = *dbg.cache;
     auto  type  = cache.ctx->GetEngine()->GetTypeInfoById(var->address.typeId);
+
+    if (!type || var->address.ResolveAs<void>() == nullptr)
+        return false;
 
     if (type->GetPropertyCount())
         return true;
@@ -919,10 +937,14 @@ void asIDBObjectTypeEvaluator::QueryVariableForEach(asIDBVariable::Ptr var, int 
     if (ctx->GetState() == asEXECUTION_EXCEPTION)
         return;
 
-    auto type = ctx->GetEngine()->GetTypeInfoById(var->address.typeId);
+    auto  type   = ctx->GetEngine()->GetTypeInfoById(var->address.typeId);
+    void* objPtr = var->address.ResolveAs<void>();
+
+    if (!type || !objPtr)
+        return;
 
     dbg.internal_execution = true;
-    asIDBObjectIteratorHelper it(type, var->address.ResolveAs<void>());
+    asIDBObjectIteratorHelper it(type, objPtr);
 
     if (!it)
     {
@@ -993,30 +1015,76 @@ const asIDBTypeEvaluator& asIDBCache::GetEvaluator(const asIDBVarAddr& id) const
     else if (id.ResolveAs<void>() == nullptr)
         return nullType;
 
-    auto type = ctx->GetEngine()->GetTypeInfoById(id.typeId);
-
-    // we'll use the fall back evaluators.
-    // check primitives first.
-#define CHECK_PRIMITIVE_EVAL(asTypeId, cTypeName)                                      \
-    if (id.typeId == asTypeId)                                                         \
-    {                                                                                  \
-        static constexpr const asIDBPrimitiveTypeEvaluator<cTypeName> cTypeName##Type; \
-        return cTypeName##Type;                                                        \
+    // Check primitives first.
+    // If not an object type, check all primitive type IDs safely.
+    if ((id.typeId & asTYPEID_MASK_OBJECT) == 0)
+    {
+        switch (id.typeId & asTYPEID_MASK_SEQNBR)
+        {
+            case asTYPEID_BOOL:
+            {
+                static constexpr const asIDBPrimitiveTypeEvaluator<bool> boolType;
+                return boolType;
+            }
+            case asTYPEID_INT8:
+            {
+                static constexpr const asIDBPrimitiveTypeEvaluator<int8_t> int8Type;
+                return int8Type;
+            }
+            case asTYPEID_INT16:
+            {
+                static constexpr const asIDBPrimitiveTypeEvaluator<int16_t> int16Type;
+                return int16Type;
+            }
+            case asTYPEID_INT32:
+            {
+                static constexpr const asIDBPrimitiveTypeEvaluator<int32_t> int32Type;
+                return int32Type;
+            }
+            case asTYPEID_INT64:
+            {
+                static constexpr const asIDBPrimitiveTypeEvaluator<int64_t> int64Type;
+                return int64Type;
+            }
+            case asTYPEID_UINT8:
+            {
+                static constexpr const asIDBPrimitiveTypeEvaluator<uint8_t> uint8Type;
+                return uint8Type;
+            }
+            case asTYPEID_UINT16:
+            {
+                static constexpr const asIDBPrimitiveTypeEvaluator<uint16_t> uint16Type;
+                return uint16Type;
+            }
+            case asTYPEID_UINT32:
+            {
+                static constexpr const asIDBPrimitiveTypeEvaluator<uint32_t> uint32Type;
+                return uint32Type;
+            }
+            case asTYPEID_UINT64:
+            {
+                static constexpr const asIDBPrimitiveTypeEvaluator<uint64_t> uint64Type;
+                return uint64Type;
+            }
+            case asTYPEID_FLOAT:
+            {
+                static constexpr const asIDBPrimitiveTypeEvaluator<float> floatType;
+                return floatType;
+            }
+            case asTYPEID_DOUBLE:
+            {
+                static constexpr const asIDBPrimitiveTypeEvaluator<double> doubleType;
+                return doubleType;
+            }
+            case asTYPEID_VOID:
+            default:
+                return uninitType;
+        }
     }
 
-    CHECK_PRIMITIVE_EVAL(asTYPEID_BOOL, bool);
-    CHECK_PRIMITIVE_EVAL(asTYPEID_INT8, int8_t);
-    CHECK_PRIMITIVE_EVAL(asTYPEID_INT16, int16_t);
-    CHECK_PRIMITIVE_EVAL(asTYPEID_INT32, int32_t);
-    CHECK_PRIMITIVE_EVAL(asTYPEID_INT64, int64_t);
-    CHECK_PRIMITIVE_EVAL(asTYPEID_UINT8, uint8_t);
-    CHECK_PRIMITIVE_EVAL(asTYPEID_UINT16, uint16_t);
-    CHECK_PRIMITIVE_EVAL(asTYPEID_UINT32, uint32_t);
-    CHECK_PRIMITIVE_EVAL(asTYPEID_UINT64, uint64_t);
-    CHECK_PRIMITIVE_EVAL(asTYPEID_FLOAT, float);
-    CHECK_PRIMITIVE_EVAL(asTYPEID_DOUBLE, double);
-
-#undef CHECK_PRIMITIVE_EVAL
+    auto type = ctx->GetEngine()->GetTypeInfoById(id.typeId);
+    if (!type)
+        return uninitType;
 
     if (type->GetFlags() & asOBJ_ENUM)
     {
@@ -1149,6 +1217,13 @@ void asIDBFileWorkspace::CompileBreakpointPositions()
     int         col;
     int         row = ctx->GetLineNumber(0, &col, &section);
 
+    static int s_lcCount = 0;
+    if (++s_lcCount % 100 == 1)
+    {
+        ASDebug_Log("LineCallback #%d: sec='%s', row=%d, bp_count=%zu",
+                    s_lcCount, section ? section : "null", row, debugger->breakpoints.size());
+    }
+
     // we might not have an action - functions called from within
     // the debugger will never have this set.
     if (debugger->action != asIDBAction::None)
@@ -1183,7 +1258,21 @@ void asIDBFileWorkspace::CompileBreakpointPositions()
             // current stack level.
             else if (debugger->action == asIDBAction::StepOver)
             {
-                if (ctx->GetCallstackSize() <= debugger->stack_size)
+                bool isSameOrCaller = false;
+                if (ctx->GetCallstackSize() < debugger->stack_size)
+                {
+                    isSameOrCaller = true;
+                }
+                else if (ctx->GetCallstackSize() == debugger->stack_size)
+                {
+                    if (debugger->stepping_function_id == -1 ||
+                        (func && func->GetId() == debugger->stepping_function_id))
+                    {
+                        isSameOrCaller = true;
+                    }
+                }
+
+                if (isSameOrCaller)
                 {
                     if (!isUnnamed || debugger->stepping_function_id == (func ? func->GetId() : -1))
                     {
@@ -1226,10 +1315,37 @@ void asIDBFileWorkspace::CompileBreakpointPositions()
         if (entries == debugger->breakpoints.end())
         {
             std::string secStr(section);
+            std::replace(secStr.begin(), secStr.end(), '\\', '/');
+
             for (auto it = debugger->breakpoints.begin(); it != debugger->breakpoints.end(); ++it)
             {
-                if (secStr.length() >= it->first.length() &&
-                    secStr.compare(secStr.length() - it->first.length(), it->first.length(), it->first) == 0)
+                if (it->first.empty())
+                    continue;
+
+                std::string bpPath(it->first);
+                std::replace(bpPath.begin(), bpPath.end(), '\\', '/');
+
+                bool match = false;
+                if (secStr == bpPath)
+                {
+                    match = true;
+                }
+                else if (secStr.length() > bpPath.length() &&
+                         secStr.compare(secStr.length() - bpPath.length(), bpPath.length(), bpPath) == 0)
+                {
+                    char prevChar = secStr[secStr.length() - bpPath.length() - 1];
+                    if (prevChar == '/' || prevChar == '\\')
+                        match = true;
+                }
+                else if (bpPath.length() > secStr.length() &&
+                         bpPath.compare(bpPath.length() - secStr.length(), secStr.length(), secStr) == 0)
+                {
+                    char prevChar = bpPath[bpPath.length() - secStr.length() - 1];
+                    if (prevChar == '/' || prevChar == '\\')
+                        match = true;
+                }
+
+                if (match)
                 {
                     entries = it;
                     break;
@@ -1239,6 +1355,8 @@ void asIDBFileWorkspace::CompileBreakpointPositions()
 
         if (entries != debugger->breakpoints.end())
         {
+            ASDebug_Log("BP entry found for '%.*s'! checking row %d vs %zu registered bps",
+                        (int)entries->first.length(), entries->first.data(), row, entries->second.size());
             for (auto& lines : entries->second)
             {
                 if (row == lines.line)
@@ -1296,18 +1414,26 @@ void asIDBDebugger::HookContext(asIScriptContext* ctx, bool has_work)
             workspace->engines.insert(ctx->GetEngine());
 
         if (has_work)
-            ctx->SetLineCallback(asFUNCTION(asIDBDebugger::LineCallback), this, asCALL_CDECL);
+        {
+            int r = ctx->SetLineCallback(asFUNCTION(asIDBDebugger::LineCallback), this, asCALL_CDECL);
+            ASDebug_Log("SetLineCallback on ctx=%p returned %d", ctx, r);
+        }
         ctx->SetExceptionCallback(asFUNCTION(asIDBDebugger::ExceptionCallback), this, asCALL_CDECL);
     }
 }
 
 void asIDBDebugger::DebugBreak(asIScriptContext* ctx)
 {
+    ASDebug_Log("DebugBreak ENTERED! ctx=%p", ctx);
     if (workspace->engines.find(ctx->GetEngine()) == workspace->engines.end())
+    {
+        ASDebug_Log("DebugBreak IGNORED: engine %p not found!", ctx->GetEngine());
         return;
+    }
 
     {
         std::scoped_lock lock(mutex);
+        last_break_action                     = action;
         action                                = asIDBAction::None;
         stepping_context                      = nullptr;
         stepping_function_id                  = -1;
