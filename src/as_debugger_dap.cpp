@@ -6,6 +6,8 @@
 #include <dap/session.h>
 #include <filesystem>
 #include <charconv>
+#include <chrono>
+#include <thread>
 
 #ifdef _WIN32
 #    ifndef WIN32_LEAN_AND_MEAN
@@ -804,6 +806,20 @@ void asIDBDAPServer::StartServer()
 
 void asIDBDAPServer::StopServer()
 {
+    std::shared_ptr<asIDBDAPClient> c;
+    {
+        std::lock_guard<std::mutex> lock(clientMutex);
+        c = client;
+    }
+    if (c && c->session)
+    {
+        dap::TerminatedEvent termEvent;
+        c->session->send(termEvent);
+        dap::ExitedEvent exitEvent;
+        exitEvent.exitCode = 0;
+        c->session->send(exitEvent);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
     {
         std::lock_guard<std::mutex> lock(clientMutex);
         client.reset();

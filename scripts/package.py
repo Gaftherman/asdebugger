@@ -6,10 +6,12 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
+import sys
 import tarfile
 import tempfile
 import zipfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from upstream import git
 
 
@@ -92,6 +94,22 @@ def copy_notices(root, build_tree, destination):
         shutil.copy2(root / "metamod" / relative, target)
 
 
+FIXED_ZIP_DATETIME = (1980, 1, 1, 0, 0, 0)
+
+
+def write_normalized_zip_member(stream: zipfile.ZipFile, path: Path, arcname: str) -> None:
+    zinfo = zipfile.ZipInfo(arcname, FIXED_ZIP_DATETIME)
+    zinfo.compress_type = zipfile.ZIP_DEFLATED
+    zinfo.external_attr = 0o644 << 16
+    with open(path, "rb") as f:
+        stream.writestr(zinfo, f.read())
+
+
+def normalize_tarinfo(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
+    tarinfo.mtime = 0
+    return tarinfo
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", choices=["Debug", "Release"], required=True)
@@ -121,14 +139,15 @@ def main():
             with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as stream:
                 for file in sorted((stage / "build").rglob("*")):
                     if file.is_file():
-                        stream.write(file, file.relative_to(stage))
+                        rel = str(file.relative_to(stage)).replace("\\", "/")
+                        write_normalized_zip_member(stream, file, rel)
             with zipfile.ZipFile(archive) as stream:
                 if stream.testzip() is not None:
                     raise ValueError("ZIP integrity check failed")
         else:
             archive = output / (name + ".tar.gz")
             with tarfile.open(archive, "w:gz") as stream:
-                stream.add(stage / "build", arcname="build")
+                stream.add(stage / "build", arcname="build", filter=normalize_tarinfo)
             with tarfile.open(archive) as stream:
                 if not stream.getmember("build/addons/metamod/dlls/asdebugger.so").isfile():
                     raise ValueError("Plugin missing from archive")
