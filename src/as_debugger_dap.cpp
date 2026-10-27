@@ -486,6 +486,7 @@ public:
                 auto& scope              = response.scopes.emplace_back();
                 scope.name               = "Temporaries";
                 scope.presentationHint   = "registers";
+                scope.expensive          = true;
                 scope.namedVariables     = stack.scope.registers->namedProps.size();
                 scope.indexedVariables   = stack.scope.registers->indexedProps.size();
                 scope.variablesReference = stack.scope.registers->expandRefId.value_or(0);

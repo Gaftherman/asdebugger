@@ -178,7 +178,11 @@ void asIDBScope::CalcLocals(asIDBDebugger& dbg, asIScriptFunction* function, asI
 
         asIDBTypeId typeKey{typeId, modifiers};
 
-        std::string localName = (name && *name && *name != '{' && *name != '}') ? fmt::format("{} (&{})", name, n) : fmt::format("&{}", n);
+        std::string localName;
+        if (name && *name && *name != '{' && *name != '}')
+            localName = name;
+        else
+            localName = fmt::format("&{}", n);
 
         const std::string_view viewType = cache.GetTypeNameFromType(typeKey);
 
@@ -767,9 +771,20 @@ static bool SafeReadCString(const void* ptr, char* out_buf, size_t buf_size, siz
             return false;
         const CString* cstr = reinterpret_cast<const CString*>(ptr);
         size_t         len  = cstr->m_len;
-        size_t         cap  = cstr->m_capacity;
-        const char*    p    = cstr->m_ptr;
-        if (len > 1000000 || cap < len || !p)
+        if (len > 10000000)
+            return false;
+
+        if (len == 0)
+        {
+            out_len       = 0;
+            out_truncated = false;
+            if (buf_size > 0)
+                out_buf[0] = '\0';
+            return true;
+        }
+
+        const char* p = cstr->m_ptr;
+        if (!p)
             return false;
 
         out_len        = len;
@@ -796,10 +811,18 @@ static bool SafeReadStdString(const void* ptr, char* out_buf, size_t buf_size, s
         if (!ptr)
             return false;
         const std_string* strPtr = reinterpret_cast<const std_string*>(ptr);
-        size_t            cap    = strPtr->capacity();
         size_t            len    = strPtr->len();
-        if (len > 1000000 || cap < len)
+        if (len > 10000000)
             return false;
+
+        if (len == 0)
+        {
+            out_len       = 0;
+            out_truncated = false;
+            if (buf_size > 0)
+                out_buf[0] = '\0';
+            return true;
+        }
 
         const char* c_str = const_cast<std_string*>(strPtr)->c_str();
         if (!c_str)
@@ -831,7 +854,7 @@ static bool SafeInspectScriptArray(const void* ptr, size_t& out_count, void*& ou
         const CScriptArray* arr = reinterpret_cast<const CScriptArray*>(ptr);
         CScriptArrayBuffer* buf = arr->m_buffer;
         out_elemTypeId          = arr->m_ElementTypeId;
-        out_elemSize            = arr->m_unk4;
+        out_elemSize            = arr->m_unk5; // offset 20 is elementSize in Sven Co-op CScriptArray
 
         if (!buf)
         {
@@ -841,7 +864,7 @@ static bool SafeInspectScriptArray(const void* ptr, size_t& out_count, void*& ou
         }
 
         int count = buf->m_size;
-        if (count < 0 || count > 1000000)
+        if (count < 0 || count > 10000000)
             return false;
 
         out_count = static_cast<size_t>(count);
@@ -860,9 +883,18 @@ static bool SafeReadCString(const void* ptr, char* out_buf, size_t buf_size, siz
         return false;
     const CString* cstr = reinterpret_cast<const CString*>(ptr);
     size_t         len  = cstr->m_len;
-    size_t         cap  = cstr->m_capacity;
-    const char*    p    = cstr->m_ptr;
-    if (len > 1000000 || cap < len || !p)
+    if (len > 10000000)
+        return false;
+    if (len == 0)
+    {
+        out_len       = 0;
+        out_truncated = false;
+        if (buf_size > 0)
+            out_buf[0] = '\0';
+        return true;
+    }
+    const char* p = cstr->m_ptr;
+    if (!p)
         return false;
     out_len        = len;
     size_t to_copy = (len >= buf_size) ? (buf_size - 1) : len;
@@ -877,10 +909,17 @@ static bool SafeReadStdString(const void* ptr, char* out_buf, size_t buf_size, s
     if (!ptr)
         return false;
     const std_string* strPtr = reinterpret_cast<const std_string*>(ptr);
-    size_t            cap    = strPtr->capacity();
     size_t            len    = strPtr->len();
-    if (len > 1000000 || cap < len)
+    if (len > 10000000)
         return false;
+    if (len == 0)
+    {
+        out_len       = 0;
+        out_truncated = false;
+        if (buf_size > 0)
+            out_buf[0] = '\0';
+        return true;
+    }
     const char* c_str = const_cast<std_string*>(strPtr)->c_str();
     if (!c_str)
         return false;
@@ -899,7 +938,7 @@ static bool SafeInspectScriptArray(const void* ptr, size_t& out_count, void*& ou
     const CScriptArray* arr = reinterpret_cast<const CScriptArray*>(ptr);
     CScriptArrayBuffer* buf = arr->m_buffer;
     out_elemTypeId          = arr->m_ElementTypeId;
-    out_elemSize            = arr->m_unk4;
+    out_elemSize            = arr->m_unk5; // offset 20 is elementSize in Sven Co-op CScriptArray
 
     if (!buf)
     {
@@ -909,7 +948,7 @@ static bool SafeInspectScriptArray(const void* ptr, size_t& out_count, void*& ou
     }
 
     int count = buf->m_size;
-    if (count < 0 || count > 1000000)
+    if (count < 0 || count > 10000000)
         return false;
 
     out_count = static_cast<size_t>(count);
@@ -1035,29 +1074,38 @@ class asIDBEnumTypeEvaluator : public asIDBTypeEvaluator
 public:
     virtual void Evaluate(asIDBVariable::Ptr var) const override
     {
-        auto& dbg = var->dbg;
-
-        // for enums where we have a single matched value
-        // just display it directly; it might be a mask but that's OK.
-        auto type = dbg.cache->ctx->GetEngine()->GetTypeInfoById(var->address.typeId);
-
-        union
+        if (!var || !var->address.address)
         {
-            asINT64 v = 0;
-            asQWORD uv;
-        };
-
-        switch (type->GetTypedefTypeId())
-        {
-            case asTYPEID_INT8: v = *var->address.ResolveAs<const int8_t>(); break;
-            case asTYPEID_UINT8: uv = *var->address.ResolveAs<const uint8_t>(); break;
-            case asTYPEID_INT16: v = *var->address.ResolveAs<const int16_t>(); break;
-            case asTYPEID_UINT16: uv = *var->address.ResolveAs<const uint16_t>(); break;
-            case asTYPEID_INT32: v = *var->address.ResolveAs<const int32_t>(); break;
-            case asTYPEID_UINT32: uv = *var->address.ResolveAs<const uint32_t>(); break;
-            case asTYPEID_INT64: v = *var->address.ResolveAs<const int64_t>(); break;
-            case asTYPEID_UINT64: uv = *var->address.ResolveAs<const uint64_t>(); break;
+            var->value = "(null)";
+            return;
         }
+
+        auto& dbg  = var->dbg;
+        auto  ctx  = dbg.cache ? dbg.cache->ctx : nullptr;
+        auto  type = ctx ? ctx->GetEngine()->GetTypeInfoById(var->address.typeId) : nullptr;
+        if (!type)
+        {
+            var->value = "(uninit)";
+            return;
+        }
+
+        void* rawPtr = var->address.ResolveAs<void>();
+        if (!rawPtr)
+        {
+            var->value = "(null)";
+            return;
+        }
+
+        asINT64 v  = 0;
+        size_t  sz = type->GetSize();
+        if (sz == 1)
+            v = *reinterpret_cast<const int8_t*>(rawPtr);
+        else if (sz == 2)
+            v = *reinterpret_cast<const int16_t*>(rawPtr);
+        else if (sz == 8)
+            v = *reinterpret_cast<const int64_t*>(rawPtr);
+        else
+            v = *reinterpret_cast<const int32_t*>(rawPtr);
 
         for (asUINT e = 0; e < type->GetEnumValueCount(); e++)
         {
@@ -1072,69 +1120,53 @@ public:
 
             if (ov == v)
             {
-                if (type->GetTypedefTypeId() >= asTYPEID_UINT8 && type->GetTypedefTypeId() <= asTYPEID_UINT64)
-                {
-                    var->value = fmt::format("{} ({})", name, uv);
-                    return;
-                }
-
-                var->value = fmt::format("{} ({})", name, v);
+                var->value = fmt::format("{} ({})", name ? name : "???", v);
                 return;
             }
         }
 
-        std::bitset<32> bits(v);
+        std::bitset<32> bits(static_cast<uint32_t>(v));
 
-        if (bits.count() == 1)
+        if (bits.count() <= 1)
         {
-            if (type->GetTypedefTypeId() >= asTYPEID_UINT8 && type->GetTypedefTypeId() <= asTYPEID_UINT64)
-            {
-                var->value = fmt::format("{}", uv);
-                return;
-            }
-
             var->value = fmt::format("{}", v);
             return;
         }
 
-        var->value      = fmt::format("{} bits", bits.count());
+        var->value      = fmt::format("{} bits ({})", bits.count(), v);
         var->expandable = true;
     }
 
     virtual void Expand(asIDBVariable::Ptr var) const override
     {
+        if (!var || !var->address.address)
+            return;
+
         auto& dbg   = var->dbg;
         auto& cache = *dbg.cache;
-        auto  type  = cache.ctx->GetEngine()->GetTypeInfoById(var->address.typeId);
+        auto  ctx   = cache.ctx;
+        auto  type  = ctx ? ctx->GetEngine()->GetTypeInfoById(var->address.typeId) : nullptr;
+        if (!type)
+            return;
 
-        union
+        void* rawPtr = var->address.ResolveAs<void>();
+        if (!rawPtr)
+            return;
+
+        asINT64 v  = 0;
+        size_t  sz = type->GetSize();
+        if (sz == 1)
+            v = *reinterpret_cast<const int8_t*>(rawPtr);
+        else if (sz == 2)
+            v = *reinterpret_cast<const int16_t*>(rawPtr);
+        else if (sz == 8)
+            v = *reinterpret_cast<const int64_t*>(rawPtr);
+        else
+            v = *reinterpret_cast<const int32_t*>(rawPtr);
+
         {
-            asINT64 v = 0;
-            asQWORD uv;
-        };
-
-        switch (type->GetTypedefTypeId())
-        {
-            case asTYPEID_INT8: v = *var->address.ResolveAs<const int8_t>(); break;
-            case asTYPEID_UINT8: uv = *var->address.ResolveAs<const uint8_t>(); break;
-            case asTYPEID_INT16: v = *var->address.ResolveAs<const int16_t>(); break;
-            case asTYPEID_UINT16: uv = *var->address.ResolveAs<const uint16_t>(); break;
-            case asTYPEID_INT32: v = *var->address.ResolveAs<const int32_t>(); break;
-            case asTYPEID_UINT32: uv = *var->address.ResolveAs<const uint32_t>(); break;
-            case asTYPEID_INT64: v = *var->address.ResolveAs<const int64_t>(); break;
-            case asTYPEID_UINT64: uv = *var->address.ResolveAs<const uint64_t>(); break;
-        }
-
-        {
-            std::string rawValue;
-
-            if (type->GetTypedefTypeId() >= asTYPEID_UINT8 && type->GetTypedefTypeId() <= asTYPEID_UINT64)
-                rawValue = fmt::format("{}", uv);
-            else
-                rawValue = fmt::format("{}", v);
-
             auto child       = var->CreateChildVariable("value", {}, "");
-            child->value     = std::move(rawValue);
+            child->value     = fmt::format("{}", v);
             child->evaluated = true;
         }
 
@@ -1509,22 +1541,43 @@ void asIDBArrayTypeEvaluator::Expand(asIDBVariable::Ptr var) const
     if (var->dbg.cache)
         elemTypeName = var->dbg.cache->GetTypeNameFromType({elemTypeId, asTM_NONE});
 
-    if (elemSize <= 0 && engine)
+    if ((elemSize <= 0 || elemSize > 65536) && engine)
     {
-        auto subType = engine->GetTypeInfoById(elemTypeId);
-        if (subType)
-            elemSize = subType->GetSize();
+        if (elemTypeId & (asTYPEID_HANDLETOCONST | asTYPEID_OBJHANDLE))
+        {
+            elemSize = sizeof(void*);
+        }
         else
-            elemSize = engine->GetSizeOfPrimitiveType(elemTypeId);
+        {
+            auto subType = engine->GetTypeInfoById(elemTypeId);
+            if (subType)
+                elemSize = subType->GetSize();
+            else
+                elemSize = engine->GetSizeOfPrimitiveType(elemTypeId);
+        }
     }
 
     if (elemSize <= 0)
-        elemSize = 4;
+        elemSize = sizeof(void*);
 
-    for (size_t i = 0; i < count; i++)
+    constexpr size_t MAX_EXPAND_ELEMENTS = 256;
+    size_t           limit               = std::min<size_t>(count, MAX_EXPAND_ELEMENTS);
+
+    for (size_t i = 0; i < limit; i++)
     {
         void* elemAddr = static_cast<char*>(data) + i * elemSize;
         var->CreateChildVariable(fmt::format("[{}]", i), asIDBVarAddr{elemTypeId, false, elemAddr}, elemTypeName);
+    }
+
+    if (count > MAX_EXPAND_ELEMENTS)
+    {
+        auto notice = var->CreateChildVariable(
+            fmt::format("[... {} elements omitted to prevent engine freeze ...]", count - MAX_EXPAND_ELEMENTS),
+            asIDBVarAddr{0, false, nullptr},
+            "notice");
+        notice->value      = fmt::format("{} more elements", count - MAX_EXPAND_ELEMENTS);
+        notice->evaluated  = true;
+        notice->expandable = false;
     }
 }
 
@@ -1617,108 +1670,105 @@ const asIDBTypeEvaluator& asIDBCache::GetEvaluator(const asIDBVarAddr& id) const
     else if (id.ResolveAs<void>() == nullptr)
         return nullType;
 
-    // Check primitives first.
-    // If not an object type, check all primitive type IDs safely.
-    if ((id.typeId & asTYPEID_MASK_OBJECT) == 0)
+    // Check registered engine / script types first (including enums, funcdefs, objects, etc.)
+    auto type = ctx ? ctx->GetEngine()->GetTypeInfoById(id.typeId) : nullptr;
+    if (type)
     {
-        switch (id.typeId & asTYPEID_MASK_SEQNBR)
+        if (type->GetFlags() & asOBJ_ENUM)
         {
-            case asTYPEID_BOOL:
-            {
-                static constexpr const asIDBPrimitiveTypeEvaluator<bool> boolType;
-                return boolType;
-            }
-            case asTYPEID_INT8:
-            {
-                static constexpr const asIDBPrimitiveTypeEvaluator<int8_t> int8Type;
-                return int8Type;
-            }
-            case asTYPEID_INT16:
-            {
-                static constexpr const asIDBPrimitiveTypeEvaluator<int16_t> int16Type;
-                return int16Type;
-            }
-            case asTYPEID_INT32:
-            {
-                static constexpr const asIDBPrimitiveTypeEvaluator<int32_t> int32Type;
-                return int32Type;
-            }
-            case asTYPEID_INT64:
-            {
-                static constexpr const asIDBPrimitiveTypeEvaluator<int64_t> int64Type;
-                return int64Type;
-            }
-            case asTYPEID_UINT8:
-            {
-                static constexpr const asIDBPrimitiveTypeEvaluator<uint8_t> uint8Type;
-                return uint8Type;
-            }
-            case asTYPEID_UINT16:
-            {
-                static constexpr const asIDBPrimitiveTypeEvaluator<uint16_t> uint16Type;
-                return uint16Type;
-            }
-            case asTYPEID_UINT32:
-            {
-                static constexpr const asIDBPrimitiveTypeEvaluator<uint32_t> uint32Type;
-                return uint32Type;
-            }
-            case asTYPEID_UINT64:
-            {
-                static constexpr const asIDBPrimitiveTypeEvaluator<uint64_t> uint64Type;
-                return uint64Type;
-            }
-            case asTYPEID_FLOAT:
-            {
-                static constexpr const asIDBPrimitiveTypeEvaluator<float> floatType;
-                return floatType;
-            }
-            case asTYPEID_DOUBLE:
-            {
-                static constexpr const asIDBPrimitiveTypeEvaluator<double> doubleType;
-                return doubleType;
-            }
-            case asTYPEID_VOID:
-            default:
-                return uninitType;
+            static constexpr const asIDBEnumTypeEvaluator enumType;
+            return enumType;
         }
+        else if (type->GetFlags() & asOBJ_FUNCDEF)
+        {
+            static constexpr const asIDBFuncDefTypeEvaluator funcdefType;
+            return funcdefType;
+        }
+
+        const char* typeName = type->GetName();
+        if (typeName && strcmp(typeName, "string") == 0)
+        {
+            static const asIDBStringTypeEvaluator stringType;
+            return stringType;
+        }
+        else if (typeName && (strcmp(typeName, "array") == 0 || (type->GetFlags() & asOBJ_TEMPLATE)))
+        {
+            static const asIDBArrayTypeEvaluator arrayType;
+            return arrayType;
+        }
+        else if (typeName && strcmp(typeName, "dictionary") == 0)
+        {
+            static const asIDBDictionaryTypeEvaluator dictType;
+            return dictType;
+        }
+
+        // finally, just return the base object one.
+        static constexpr const asIDBObjectTypeEvaluator objectType;
+        return objectType;
     }
 
-    auto type = ctx->GetEngine()->GetTypeInfoById(id.typeId);
-    if (!type)
-        return uninitType;
-
-    if (type->GetFlags() & asOBJ_ENUM)
+    // If no type info exists, check primitive types.
+    switch (id.typeId & asTYPEID_MASK_SEQNBR)
     {
-        static constexpr const asIDBEnumTypeEvaluator enumType;
-        return enumType;
+        case asTYPEID_BOOL:
+        {
+            static constexpr const asIDBPrimitiveTypeEvaluator<bool> boolType;
+            return boolType;
+        }
+        case asTYPEID_INT8:
+        {
+            static constexpr const asIDBPrimitiveTypeEvaluator<int8_t> int8Type;
+            return int8Type;
+        }
+        case asTYPEID_INT16:
+        {
+            static constexpr const asIDBPrimitiveTypeEvaluator<int16_t> int16Type;
+            return int16Type;
+        }
+        case asTYPEID_INT32:
+        {
+            static constexpr const asIDBPrimitiveTypeEvaluator<int32_t> int32Type;
+            return int32Type;
+        }
+        case asTYPEID_INT64:
+        {
+            static constexpr const asIDBPrimitiveTypeEvaluator<int64_t> int64Type;
+            return int64Type;
+        }
+        case asTYPEID_UINT8:
+        {
+            static constexpr const asIDBPrimitiveTypeEvaluator<uint8_t> uint8Type;
+            return uint8Type;
+        }
+        case asTYPEID_UINT16:
+        {
+            static constexpr const asIDBPrimitiveTypeEvaluator<uint16_t> uint16Type;
+            return uint16Type;
+        }
+        case asTYPEID_UINT32:
+        {
+            static constexpr const asIDBPrimitiveTypeEvaluator<uint32_t> uint32Type;
+            return uint32Type;
+        }
+        case asTYPEID_UINT64:
+        {
+            static constexpr const asIDBPrimitiveTypeEvaluator<uint64_t> uint64Type;
+            return uint64Type;
+        }
+        case asTYPEID_FLOAT:
+        {
+            static constexpr const asIDBPrimitiveTypeEvaluator<float> floatType;
+            return floatType;
+        }
+        case asTYPEID_DOUBLE:
+        {
+            static constexpr const asIDBPrimitiveTypeEvaluator<double> doubleType;
+            return doubleType;
+        }
+        case asTYPEID_VOID:
+        default:
+            return uninitType;
     }
-    else if (type->GetFlags() & asOBJ_FUNCDEF)
-    {
-        static constexpr const asIDBFuncDefTypeEvaluator funcdefType;
-        return funcdefType;
-    }
-
-    const char* typeName = type->GetName();
-    if (typeName && strcmp(typeName, "string") == 0)
-    {
-        static const asIDBStringTypeEvaluator stringType;
-        return stringType;
-    }
-    else if (typeName && (strcmp(typeName, "array") == 0 || (type->GetFlags() & asOBJ_TEMPLATE)))
-    {
-        static const asIDBArrayTypeEvaluator arrayType;
-        return arrayType;
-    }
-    else if (typeName && strcmp(typeName, "dictionary") == 0)
-    {
-        static const asIDBDictionaryTypeEvaluator dictType;
-        return dictType;
-    }
-
-    // finally, just return the base one.
-    static constexpr const asIDBObjectTypeEvaluator objectType;
-    return objectType;
 }
 
 #include <filesystem>
