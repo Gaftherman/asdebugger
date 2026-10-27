@@ -43,7 +43,15 @@ std::string asSCWorkspace::PathToSection(const std::string_view v) const
             return std::string(sec.section);
     }
 
-    // 3. Fallback: try stripping or adding base_path / scripts
+    // 3. Match against resolved file path of existing sections
+    for (const auto& sec : sections)
+    {
+        std::string resolved = SectionToPath(sec.section);
+        if (!resolved.empty() && (PathEqualsCaseInsensitive(resolved, pathStr) || PathMatchesSection(resolved, pathStr)))
+            return std::string(sec.section);
+    }
+
+    // 4. Fallback: try stripping or adding base_path / scripts
     std::string withBase = base_path + "/" + pathStr;
     for (const auto& sec : sections)
     {
@@ -79,12 +87,31 @@ std::string asSCWorkspace::SectionToPath(const std::string_view v) const
     if (std::filesystem::exists(fullPath, ec))
         return fullPath;
 
-    // 3. Try inside scripts/ if not already starting with scripts/
+    // 3. Try inside scripts/, scripts/maps/, scripts/plugins/
     if (sectionStr.rfind("scripts/", 0) != 0)
     {
         std::string scriptsPath = base_path + "/scripts/" + sectionStr;
         if (std::filesystem::exists(scriptsPath, ec))
             return scriptsPath;
+
+        std::string mapsPath = base_path + "/scripts/maps/" + sectionStr;
+        if (std::filesystem::exists(mapsPath, ec))
+            return mapsPath;
+
+        std::string pluginsPath = base_path + "/scripts/plugins/" + sectionStr;
+        if (std::filesystem::exists(pluginsPath, ec))
+            return pluginsPath;
+    }
+    else
+    {
+        std::string rel      = sectionStr.substr(8);
+        std::string mapsPath = base_path + "/scripts/maps/" + rel;
+        if (std::filesystem::exists(mapsPath, ec))
+            return mapsPath;
+
+        std::string pluginsPath = base_path + "/scripts/plugins/" + rel;
+        if (std::filesystem::exists(pluginsPath, ec))
+            return pluginsPath;
     }
 
     return {};
@@ -164,6 +191,24 @@ void asSCWorkspace::CompileScriptSources()
                 const char* section = func->GetScriptSectionName();
                 if (section && *section)
                     AddSection(section);
+            }
+
+            for (asUINT t = 0; t < module->GetObjectTypeCount(); t++)
+            {
+                asITypeInfo* type = module->GetObjectTypeByIndex(t);
+                if (!type)
+                    continue;
+
+                for (asUINT m = 0; m < type->GetMethodCount(); m++)
+                {
+                    auto method = type->GetMethodByIndex(m, false);
+                    if (method)
+                    {
+                        const char* section = method->GetScriptSectionName();
+                        if (section && *section)
+                            AddSection(section);
+                    }
+                }
             }
         }
     }

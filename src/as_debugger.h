@@ -350,7 +350,6 @@ public:
 
     virtual ~asIDBCache()
     {
-        ctx->ClearLineCallback();
         ctx->Release();
     }
 

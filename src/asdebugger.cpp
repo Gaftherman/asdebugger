@@ -84,7 +84,7 @@ static int Hooked_Execute(asIScriptContext* pThis)
     // Fast-path: if debugger has work pending (breakpoints or stepping), ensure context is hooked
     if (g_Debugger && g_Debugger->has_work_atomic.load(std::memory_order_relaxed))
     {
-        g_Debugger->HookContextOnce(pThis);
+        g_Debugger->HookContext(pThis, true);
     }
 
     int ret = g_pfnOriginalExecute(pThis);

@@ -1673,12 +1673,8 @@ void asIDBDebugger::DebugBreak(asIScriptContext* ctx)
     {
         ASDebug_Log("DebugBreak ENTERED! ctx=%p", ctx);
     }
-    if (workspace->engines.find(ctx->GetEngine()) == workspace->engines.end())
-    {
-        if (ASDebug_IsVerbose())
-            ASDebug_Log("DebugBreak IGNORED: engine %p not found!", ctx->GetEngine());
-        return;
-    }
+    if (workspace && ctx->GetEngine())
+        workspace->engines.insert(ctx->GetEngine());
 
     {
         std::scoped_lock lock(mutex);
