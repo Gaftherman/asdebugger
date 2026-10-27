@@ -12,7 +12,7 @@ endif()
 set(METAMOD_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/metamod")
 set(ASEXT_SOURCE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/asext")
 include("${METAMOD_SOURCE_PATH}/cmake/Platform.cmake")
-project(asdebugger VERSION 1.3.0 LANGUAGES C CXX)
+project(asdebugger VERSION 1.3.1 LANGUAGES C CXX)
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
 endif()
@@ -32,6 +32,12 @@ FetchContent_Declare(
 )
 set(CPPDAP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(cppdap)
+
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+execute_process(
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/patch_cppdap.py" "${cppdap_SOURCE_DIR}"
+    RESULT_VARIABLE _PATCH_RES
+)
 
 set(ASDEBUGGER_SOURCES
     src/asdebugger.cpp

@@ -69,7 +69,7 @@ void asSCDebugger::Suspend()
         dap_server->SendEventToClient(event);
     }
 
-    std::unique_lock<std::mutex> lock(m_suspendMutex);
+    std::unique_lock<std::recursive_mutex> lock(m_suspendMutex);
     m_suspended = true;
 
     while (m_suspended.load())
@@ -78,8 +78,10 @@ void asSCDebugger::Suspend()
             return !m_suspended.load();
         });
 
+        lock.unlock();
         if (dap_server)
             dap_server->Tick();
+        lock.lock();
     }
 }
 

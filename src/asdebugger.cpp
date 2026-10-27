@@ -54,23 +54,21 @@ static int __fastcall Hooked_Execute(asIScriptContext* pThis, void* /*dummy*/)
 static int Hooked_Execute(asIScriptContext* pThis)
 #endif
 {
-    if (++s_ExecuteCount % 200 == 1)
+    // Fast-path: if no debugger work is pending, bypass all mutex locks
+    if (g_Debugger && g_Debugger->has_work_atomic.load(std::memory_order_relaxed))
     {
-        LOG_MESSAGE(PLID, "Hooked_Execute called (count=%d, has_work=%d)",
-                    s_ExecuteCount, g_Debugger ? (int)g_Debugger->HasWork() : 0);
-    }
-
-    if (g_Debugger && g_Debugger->HasWork())
-    {
-        asIScriptFunction* fn = pThis->GetFunction(0);
-        ASDebug_Log("Hooked_Execute HAS WORK: ctx=%p, func=%s, state=%d",
-                    pThis, fn ? fn->GetName() : "null", (int)pThis->GetState());
-        g_Debugger->HookContext(pThis, true);
+        if (g_Debugger->HasWork())
+        {
+            asIScriptFunction* fn = pThis->GetFunction(0);
+            ASDebug_Log("Hooked_Execute HAS WORK: ctx=%p, func=%s, state=%d",
+                        pThis, fn ? fn->GetName() : "null", (int)pThis->GetState());
+            g_Debugger->HookContext(pThis, true);
+        }
     }
 
     int ret = g_pfnOriginalExecute(pThis);
 
-    if (g_Debugger)
+    if (g_Debugger && g_Debugger->has_work_atomic.load(std::memory_order_relaxed))
     {
         std::scoped_lock lock(g_Debugger->mutex);
         if (pThis == g_Debugger->stepping_context &&
@@ -79,6 +77,7 @@ static int Hooked_Execute(asIScriptContext* pThis)
             g_Debugger->action               = asIDBAction::None;
             g_Debugger->stepping_context     = nullptr;
             g_Debugger->stepping_function_id = -1;
+            g_Debugger->UpdateHasWorkAtomic();
         }
     }
 
@@ -195,6 +194,14 @@ void ASDebugger_Init(const char* gameDir)
         return;
     }
 
+    const char* envPort = getenv("ASDEBUGGER_PORT");
+    if (envPort && *envPort)
+    {
+        int p = atoi(envPort);
+        if (p > 0 && p < 65536)
+            g_DebuggerPort = p;
+    }
+
     std::string basePath = (gameDir && *gameDir) ? gameDir : "svencoop";
 
     g_Workspace            = std::make_unique<asSCWorkspace>(basePath, std::initializer_list<asIScriptEngine*>{engine});
@@ -207,7 +214,16 @@ void ASDebugger_Init(const char* gameDir)
 
     // Start DAP server
     g_DAPServer->StartServer();
-    LOG_MESSAGE(PLID, "AngelScript DAP Server started on port %d (base path: '%s')", g_DebuggerPort, basePath.c_str());
+    if (g_DAPServer->IsRunning())
+    {
+        LOG_MESSAGE(PLID, "AngelScript DAP Server started on port %d (base path: '%s')",
+                    g_DAPServer->GetBoundPort(), basePath.c_str());
+    }
+    else
+    {
+        LOG_MESSAGE(PLID, "AngelScript DAP Server could not be started on port %d (port in use); debugger is idle and game continues smoothly.",
+                    g_DebuggerPort);
+    }
 }
 
 void ASDebugger_Frame()

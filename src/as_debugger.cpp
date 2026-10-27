@@ -1443,24 +1443,34 @@ void asIDBDebugger::DebugBreak(asIScriptContext* ctx)
             new_cache->Restore(*cache);
 
         std::swap(cache, new_cache);
+        UpdateHasWorkAtomic();
     }
 
     HookContext(ctx, true);
     Suspend();
 }
 
+void asIDBDebugger::UpdateHasWorkAtomic()
+{
+    std::scoped_lock lock(mutex);
+    bool             work = (action != asIDBAction::None) || (!breakpoints.empty()) || (!function_breakpoints.empty());
+    has_work_atomic.store(work, std::memory_order_release);
+}
+
 bool asIDBDebugger::HasWork()
 {
     std::scoped_lock lock(mutex);
 
+    bool work = false;
     if (action != asIDBAction::None)
-        return true;
+        work = true;
     else if (!breakpoints.empty())
-        return true;
+        work = true;
     else if (!function_breakpoints.empty())
-        return true;
+        work = true;
 
-    return false;
+    has_work_atomic.store(work, std::memory_order_release);
+    return work;
 }
 
 // debugger operations; these set the next breakpoint
@@ -1490,6 +1500,7 @@ void asIDBDebugger::SetAction(asIDBAction new_action)
             if (cache)
                 stack_size = cache->ctx->GetCallstackSize();
         }
+        UpdateHasWorkAtomic();
     }
 
     Resume();
@@ -1497,7 +1508,8 @@ void asIDBDebugger::SetAction(asIDBAction new_action)
 
 bool asIDBDebugger::ToggleBreakpoint(std::string_view section, int line)
 {
-    auto it = breakpoints.find(section);
+    std::scoped_lock lock(mutex);
+    auto             it = breakpoints.find(section);
 
     if (it == breakpoints.end())
         it = breakpoints.emplace(section, asIDBSectionBreakpoints{}).first;
@@ -1511,10 +1523,12 @@ bool asIDBDebugger::ToggleBreakpoint(std::string_view section, int line)
             if (it->second.empty())
                 breakpoints.erase(it);
 
+            UpdateHasWorkAtomic();
             return false;
         }
     }
 
     it->second.push_back({line});
+    UpdateHasWorkAtomic();
     return true;
 }

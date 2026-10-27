@@ -640,6 +640,10 @@ public:
     // using this debugger.
     virtual bool HasWork();
 
+    // atomic flag for lockless fast-path check in Hooked_Execute
+    std::atomic<bool> has_work_atomic{false};
+    void              UpdateHasWorkAtomic();
+
     // debugger operations; these set the next breakpoint,
     // clear the cache context and call Resume.
     virtual void SetAction(asIDBAction new_action);

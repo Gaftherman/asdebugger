@@ -22,7 +22,7 @@ protected:
     virtual std::unique_ptr<asIDBCache> CreateCache(asIScriptContext* ctx) override;
 
 private:
-    std::mutex              m_suspendMutex;
-    std::condition_variable m_cv;
-    std::atomic_bool        m_suspended = false;
+    std::recursive_mutex        m_suspendMutex;
+    std::condition_variable_any m_cv;
+    std::atomic_bool            m_suspended = false;
 };

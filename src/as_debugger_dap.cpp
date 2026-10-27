@@ -7,6 +7,22 @@
 #include <filesystem>
 #include <charconv>
 
+#ifdef _WIN32
+#    ifndef WIN32_LEAN_AND_MEAN
+#        define WIN32_LEAN_AND_MEAN
+#    endif
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <winsock2.h>
+#    include <ws2tcpip.h>
+#else
+#    include <sys/socket.h>
+#    include <netinet/in.h>
+#    include <arpa/inet.h>
+#    include <unistd.h>
+#endif
+
 class asIDBDAPClient
 {
 public:
@@ -113,7 +129,7 @@ public:
 
         data += offset;
 
-        uint8_t* end = std::min(data_end, data + count);
+        uint8_t* end = (std::min)(data_end, data + count);
 
         if (!count || !(end - data) || data >= end)
             return response;
@@ -283,7 +299,7 @@ public:
                             continue;
 
                         closest.line = pos.line;
-                        closest.col  = (closest.col == -1) ? pos.col : std::min(closest.col, pos.col);
+                        closest.col  = (closest.col == -1) ? pos.col : (std::min)(closest.col, pos.col);
                     }
 
                     auto& placed_bp = response.breakpoints.emplace_back();
@@ -309,6 +325,7 @@ public:
             }
         }
 
+        dbg->UpdateHasWorkAtomic();
         return response;
     }
 
@@ -329,6 +346,7 @@ public:
             bp.verified = true;
             response.breakpoints.emplace_back(std::move(bp));
         }
+        dbg->UpdateHasWorkAtomic();
         return response;
     }
 
@@ -622,6 +640,48 @@ asIDBDAPServer::asIDBDAPServer(int port, asIDBDebugger* debugger) :
     StopServer();
 }
 
+static bool CheckPortAvailable(int port)
+{
+#ifdef _WIN32
+    WSADATA wsa;
+    int     wsaRes = WSAStartup(MAKEWORD(2, 2), &wsa);
+    SOCKET  s      = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET)
+    {
+        if (wsaRes == 0)
+            WSACleanup();
+        return false;
+    }
+
+    sockaddr_in addr{};
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port        = htons(static_cast<u_short>(port));
+
+    int res = ::bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    ::closesocket(s);
+    if (wsaRes == 0)
+        WSACleanup();
+    return (res == 0);
+#else
+    int s = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s < 0)
+        return false;
+
+    int opt = 1;
+    ::setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    sockaddr_in addr{};
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port        = htons(static_cast<uint16_t>(port));
+
+    int res = ::bind(s, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    ::close(s);
+    return (res == 0);
+#endif
+}
+
 void asIDBDAPServer::ClientConnected(const std::shared_ptr<dap::ReaderWriter>& socket)
 {
     std::lock_guard<std::mutex> lock(clientMutex);
@@ -634,11 +694,49 @@ void asIDBDAPServer::ClientError(const char* msg)
 
 void asIDBDAPServer::StartServer()
 {
-    server = dap::net::Server::create();
+    int  candidatePort = port;
+    bool found         = false;
 
-    server->start(
-        "0.0.0.0", port, [&](const std::shared_ptr<dap::ReaderWriter>& socket) { this->ClientConnected(socket); },
+    // Probe requested port, then fallback to candidatePort + 1 up to +10
+    for (int offset = 0; offset <= 10; ++offset)
+    {
+        int p = port + offset;
+        if (CheckPortAvailable(p))
+        {
+            candidatePort = p;
+            found         = true;
+            break;
+        }
+    }
+
+    if (!found)
+    {
+        ASDebug_Log("WARNING: DAP server could not bind to port %d or fallback ports %d-%d (addresses already in use). DAP server disabled to avoid game hang.",
+                    port, port + 1, port + 10);
+        actual_port = 0;
+        server.reset();
+        return;
+    }
+
+    actual_port = candidatePort;
+    if (actual_port != port)
+    {
+        ASDebug_Log("NOTICE: Default DAP port %d is already in use. Automatically switched to fallback port %d.",
+                    port, actual_port);
+    }
+
+    server       = dap::net::Server::create();
+    bool started = server->start(
+        "0.0.0.0", actual_port,
+        [&](const std::shared_ptr<dap::ReaderWriter>& socket) { this->ClientConnected(socket); },
         [&](const char* msg) { this->ClientError(msg); });
+
+    if (!started)
+    {
+        ASDebug_Log("ERROR: dap::net::Server::start failed on port %d! DAP server disabled.", actual_port);
+        actual_port = 0;
+        server.reset();
+    }
 }
 
 void asIDBDAPServer::StopServer()
@@ -647,11 +745,19 @@ void asIDBDAPServer::StopServer()
         std::lock_guard<std::mutex> lock(clientMutex);
         client.reset();
     }
-    server.reset();
+    if (server)
+    {
+        server->stop();
+        server.reset();
+    }
+    actual_port = 0;
 }
 
 void asIDBDAPServer::Tick()
 {
+    if (!server)
+        return;
+
     std::lock_guard<std::mutex> lock(clientMutex);
     if (client && client->terminate)
         client.reset();
@@ -659,6 +765,9 @@ void asIDBDAPServer::Tick()
 
 void asIDBDAPServer::SendEventToClient(const dap::TypeInfo* typeinfo, const void* event)
 {
+    if (!server)
+        return;
+
     std::shared_ptr<asIDBDAPClient> c;
     {
         std::lock_guard<std::mutex> lock(clientMutex);

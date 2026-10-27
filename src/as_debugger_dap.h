@@ -20,7 +20,13 @@ class asIDBDAPServer
 {
 public:
     // port to connect to
-    const int port;
+    int port;
+    int actual_port = 0;
+
+    int GetBoundPort() const
+    {
+        return actual_port > 0 ? actual_port : port;
+    }
 
     // ptr back to debugger
     asIDBDebugger* dbg;
@@ -33,6 +39,10 @@ public:
     bool ServerActive()
     {
         return server.get() != nullptr;
+    }
+    bool IsRunning()
+    {
+        return ServerActive();
     }
     bool ClientConnected()
     {
