@@ -876,7 +876,23 @@ static bool SafeInspectScriptArray(const void* ptr, size_t& out_count, void*& ou
         return false;
     }
 }
+static void* SafeReadPointer(void* ptr)
+{
+    __try
+    {
+        return ptr ? *reinterpret_cast<void**>(ptr) : nullptr;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return nullptr;
+    }
+}
 #else
+static void* SafeReadPointer(void* ptr)
+{
+    return ptr ? *reinterpret_cast<void**>(ptr) : nullptr;
+}
+
 static bool SafeReadCString(const void* ptr, char* out_buf, size_t buf_size, size_t& out_len, bool& out_truncated)
 {
     if (!ptr)
@@ -1541,31 +1557,39 @@ void asIDBArrayTypeEvaluator::Expand(asIDBVariable::Ptr var) const
     if (var->dbg.cache)
         elemTypeName = var->dbg.cache->GetTypeNameFromType({elemTypeId, asTM_NONE});
 
-    if ((elemSize <= 0 || elemSize > 65536) && engine)
+    size_t elemStride = sizeof(void*);
+    if (elemTypeId & asTYPEID_MASK_OBJECT)
     {
-        if (elemTypeId & (asTYPEID_HANDLETOCONST | asTYPEID_OBJHANDLE))
-        {
-            elemSize = sizeof(void*);
-        }
-        else
-        {
-            auto subType = engine->GetTypeInfoById(elemTypeId);
-            if (subType)
-                elemSize = subType->GetSize();
-            else
-                elemSize = engine->GetSizeOfPrimitiveType(elemTypeId);
-        }
+        // In Sven Co-op CScriptArray, all object elements (both value objects like CString
+        // and handles like CBaseEntity@) are stored as 4-byte pointers in the array buffer.
+        elemStride = sizeof(void*);
     }
-
-    if (elemSize <= 0)
-        elemSize = sizeof(void*);
+    else if (elemSize > 0 && elemSize <= 64)
+    {
+        elemStride = static_cast<size_t>(elemSize);
+    }
+    else if (engine)
+    {
+        int primSize = engine->GetSizeOfPrimitiveType(elemTypeId);
+        elemStride = primSize > 0 ? static_cast<size_t>(primSize) : sizeof(void*);
+    }
 
     constexpr size_t MAX_EXPAND_ELEMENTS = 256;
     size_t           limit               = std::min<size_t>(count, MAX_EXPAND_ELEMENTS);
 
     for (size_t i = 0; i < limit; i++)
     {
-        void* elemAddr = static_cast<char*>(data) + i * elemSize;
+        void* slot     = static_cast<char*>(data) + i * elemStride;
+        void* elemAddr = slot;
+
+        // In CScriptArray, value objects (e.g. string) store pointers to the allocated objects
+        // in each buffer slot. We must dereference the slot so the evaluator receives the
+        // direct pointer to the object (CString*) instead of a pointer to the slot (CString**).
+        if ((elemTypeId & asTYPEID_MASK_OBJECT) && !(elemTypeId & (asTYPEID_HANDLETOCONST | asTYPEID_OBJHANDLE)))
+        {
+            elemAddr = SafeReadPointer(slot);
+        }
+
         var->CreateChildVariable(fmt::format("[{}]", i), asIDBVarAddr{elemTypeId, false, elemAddr}, elemTypeName);
     }
 
@@ -1646,7 +1670,7 @@ void asIDBDictionaryTypeEvaluator::Expand(asIDBVariable::Ptr var) const
 
             if ((valTypeId & asTYPEID_MASK_OBJECT) && !(valTypeId & asTYPEID_OBJHANDLE))
             {
-                valAddr = *reinterpret_cast<void**>(valAddr);
+                valAddr = SafeReadPointer(valAddr);
             }
 
             std::string_view typeName = "";
